@@ -22,7 +22,7 @@ class MkdirEntryDict(BaseModel):
 class CommonDict(BaseModel):
     name: str
     aliases: list[str] | None = None
-    tag: str
+    tag: str | None = None
     service_path: str
     log_file: str | None = None
     docker_image: str | None = None

@@ -34,6 +34,7 @@ class DockerService(ABC):
     ):
         self.stack: 'DockerStack' = stack
         self.name: str = config.name
+        self.tag: str = config.tag if config.tag is not None else 'dockerstack'
         self.config: CommonDict = config
         self.root_pwd: Path = root_pwd
         self.logger: DockerStackLogger = stack.logger
@@ -46,7 +47,7 @@ class DockerService(ABC):
 
         self.container: Container | None = None
         self.container_name: str = f'{self.stack.name}-{config.name}'
-        self.container_image: str = f'{config.tag}-{self.stack.name}'
+        self.container_image: str = f'{self.tag}-{self.stack.name}'
         if config.docker_image:
             self.container_image = config.docker_image
 
@@ -143,7 +144,7 @@ class DockerService(ABC):
             if isinstance(template, tuple):
                 tsrc, tdst = template
             else:
-                tsrc, tdst = (template, template)
+                tsrc, tdst = (template + '.template', template)
 
             with open(self.service_wd / tsrc, 'r') as templ_file:
                 self.templates[tdst] = Template(templ_file.read())
