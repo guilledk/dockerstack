@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+
+import pytest
+
+from dockerstack.service import DockerService
+
+@pytest.mark.stack_config(
+    from_example='multi_stack',
+    exist_ok=False, teardown=True
+)
+def test_multi_fresh(stack):
+    assert stack.status == 'healthy'
+
+
+@pytest.mark.stack_config(
+    from_example='multi_stack',
+    target_dir='tests/',
+    exist_ok=False, teardown=False
+)
+def test_multi_keep_alive_start(stack):
+    assert stack.status == 'healthy'
+
+@pytest.mark.stack_config(
+    from_dir='tests/multi_stack',
+    exist_ok=True, teardown=False
+)
+def test_multi_keep_alive_make_redis_unhealty(stack):
+    redis: DockerService = stack.get_service('redis')
+    redis.stop()
+
+    assert not redis.running
+    assert redis.status == 'unhealthy'
+    assert stack.status == 'unhealthy'
+
+@pytest.mark.stack_config(
+    from_dir='tests/multi_stack',
+    exist_ok=True, teardown=False
+)
+def test_multi_keep_alive_fix_unhealty(stack):
+    assert stack.status == 'healthy'
+
+
+@pytest.mark.stack_config(
+    from_dir='tests/multi_stack',
+    target_dir='tests/multi_stack',
+    exist_ok=True, teardown=True
+)
+def test_multi_keep_alive_stop(stack):
+    assert stack.status == 'healthy'
+

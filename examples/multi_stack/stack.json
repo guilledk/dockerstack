@@ -1,0 +1,94 @@
+{
+    "name": "example_multi_stack",
+    "services": ["kibana", "redis"],
+    "stack": [
+        {
+            "name": "elasticsearch",
+            "aliases": ["es", "elastic"],
+            "tag": "dockerstack-examples:elastic",
+            "docker_image": "docker.elastic.co/elasticsearch/elasticsearch:8.12.1",
+            "service_path": "elasticsearch",
+            "user": "elasticsearch",
+            "group": "elasticsearch",
+            "log_file": "elastic.log",
+            "mounts": [
+                {
+                    "name": "data",
+                    "source": "es_data",
+                    "target": "/es_data",
+                    "mtype": "bind"
+                }
+            ],
+            "ports": {
+                "http": 9200
+            },
+            "env": {
+                "ES_JAVA_OPTS": "-Xms2g -Xmx2g"
+            },
+            "sym_links": [
+                ["/home/elasticsearch/elasticsearch.yml", "/usr/share/elasticsearch/config/elasticsearch.yml"]
+            ],
+            "startup_phrase": " indices into cluster_state",
+            "startup_logs_kwargs": {"lines": 0, "from_latest": true, "timeout": 60},
+            "stop_sequence": ["SIGKILL"],
+
+            "protocol": "http"
+        },
+        {
+            "name": "kibana",
+            "tag": "dockerstack-examples:kibana",
+            "docker_image": "docker.elastic.co/kibana/kibana:8.12.1",
+            "service_path": "kibana",
+            "entrypoint": ["/usr/local/bin/kibana-docker"],
+            "user": "kibana",
+            "group": "kibana",
+            "log_file": "kibana.log",
+            "mounts": [
+                {
+                    "name": "data",
+                    "source": "kibana_data",
+                    "target": "/data",
+                    "mtype": "bind"
+                }
+            ],
+            "ports": {
+                "server": 5601
+            },
+            "sym_links": [
+                ["/home/kibana/kibana.yml", "/usr/share/kibana/config/kibana.yml"]
+            ],
+            "requires": ["elastic"],
+            "startup_phrase": "Kibana is now available",
+            "startup_logs_kwargs": {"lines": 0, "from_latest": true, "timeout": 60},
+
+            "host": "127.0.0.1"
+        },
+        {
+            "name": "redis",
+            "tag": "dockerstack-examples:redis",
+            "docker_image": "redis:7",
+            "service_path": "redis",
+            "user": "redis",
+            "group": "redis",
+            "log_file": "redis.log",
+            "mounts": [
+                {
+                    "name": "data",
+                    "source": "redis_data",
+                    "target": "/data",
+                    "mtype": "bind"
+                }
+            ],
+            "ports": {
+                "bind": 6379
+            },
+            "sym_links": [
+                ["/home/redis/redis.conf", "/usr/local/etc/redis/redis.conf"]
+            ],
+            "startup_phrase": "Ready to accept connections",
+
+            "host": "127.0.0.1"
+        }
+
+    ]
+}

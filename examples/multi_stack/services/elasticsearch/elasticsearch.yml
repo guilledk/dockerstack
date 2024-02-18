@@ -1,0 +1,13 @@
+path:
+  data: /es_data
+
+cluster.name: $elasticsearch_cluster_name
+node.name: $elasticsearch_node_name
+http.port: $elasticsearch_ports_http
+
+network.host: 0.0.0.0
+discovery.type: single-node
+
+bootstrap.memory_lock: true
+xpack.security.enabled: false
+action.destructive_requires_name: false
