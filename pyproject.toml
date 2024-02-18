@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dockerstack"
-version = "1.0.0-rc2"
+version = "1.0.0-rc3"
 packages = [{include = 'dockerstack', from='src'}]
 description = "Docker/python based infra as code framework"
 authors = ["Guillermo Rodriguez <guillermo@telos.net>"]
@@ -8,13 +8,13 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.9"
+pytest = "^8.0.0"
 pydantic = "^2.6.1"
 docker = "^7.0.0"
 networkx = "^3.2.1"
 simplejson = "^3.19.2"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.0.0"
 pdbp = "^1.5.0"
 
 [tool.pytest.ini_options]

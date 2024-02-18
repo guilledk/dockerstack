@@ -51,7 +51,8 @@ class DockerStack:
         logger: DockerStackLogger | None = None,
         log_level: str = 'INFO',
         root_pwd: Path | None = None,
-        config: dict | None = None
+        config: dict | None = None,
+        config_name: str  = 'stack.json'
     ):
         self.pid = os.getpid()
         self.client: DockerClient = docker.from_env()
@@ -73,7 +74,7 @@ class DockerStack:
         else:
             self.root_pwd = root_pwd
 
-        self.load_config(config=config)
+        self.load_config(name=config_name, config=config)
         self.name: str = self.config.name
 
         self.root_pwd.mkdir(parents=True, exist_ok=True)
