@@ -300,7 +300,10 @@ class DockerStack:
         entrypoint: list[str] = cont_image.attrs['Config']['Entrypoint']
 
         wrap_exec: list[str] = []
-        if service.config.entrypoint and len(service.config.entrypoint) > 0:
+        if service.command:
+            wrap_exec = service.command
+
+        elif service.config.entrypoint and len(service.config.entrypoint) > 0:
             wrap_exec = service.config.entrypoint
 
         elif entrypoint and cmd:

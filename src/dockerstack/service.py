@@ -60,6 +60,8 @@ class DockerService(ABC):
                 f'Found container with name {self.container_name} but '
                 f'its image ({self.container.image}) is not {self.container_image}')
 
+        self.command: list[str] | None = None
+
         self.startup_logs_kwargs: dict[str, Any] = config.startup_logs_kwargs
 
         self.shell = config.shell
