@@ -26,7 +26,8 @@ DEFAULT_CONF = {
     'repair': True,
     'teardown': True,
     'from_example': None,
-    'from_dir': None
+    'from_dir': None,
+    'config_name': 'stack.json'
 }
 
 
@@ -59,6 +60,9 @@ def stack(tmp_path_factory, request) -> Generator[DockerStack, None, None]:
     # teardown: if not True stack will be stopped after tests
     teardown: bool = stack_config['teardown']
 
+    # config_name: name/alias of stack.json file
+    config_name: str = stack_config['config_name']
+
     # from_example: creates a fresh stack dir from a template in examples dir
     from_example: str | None = stack_config['from_example']
 
@@ -81,7 +85,8 @@ def stack(tmp_path_factory, request) -> Generator[DockerStack, None, None]:
         target_dir = Path(from_dir)
 
     _stack = DockerStack(
-        root_pwd=target_dir.resolve(strict=True))
+        root_pwd=target_dir.resolve(strict=True),
+        config_name=config_name)
 
     with _stack.open(
         exist_ok=exist_ok,
