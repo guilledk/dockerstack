@@ -19,7 +19,7 @@ class ElasticsearchService(DockerService):
 
         self.config: ElasticsearchConfig
 
-        self.node_url = f'{self.config.protocol}://{self.ip}:{self.ports["http"]}/_cluster/health'
+        self.node_url = f'{self.config.protocol}://{self.ip}:{self.ports["http"]}'
 
         self.template_whitelist = [
             'elasticsearch.yml'
@@ -28,7 +28,7 @@ class ElasticsearchService(DockerService):
     @property
     def status(self) -> str:
         try:
-            response = requests.get(self.node_url)
+            response = requests.get(self.node_url + '/_cluster/health')
             response.raise_for_status()
 
         except requests.RequestException:

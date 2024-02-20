@@ -186,7 +186,11 @@ class DockerStack:
         service_name = self.service_alias_to_name(alias)
         service_conf = self._get_raw_service_config(alias)
 
-        service_wd = self.services_wd / service_conf['service_path']
+        serv_path = service_name
+        if 'service_path' in service_conf:
+            serv_path = service_name
+
+        service_wd = self.services_wd / serv_path
 
         spec = importlib.util.spec_from_file_location(service_name, service_wd / 'runtime.py')
         if spec is None:

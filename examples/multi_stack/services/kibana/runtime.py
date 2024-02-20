@@ -31,9 +31,6 @@ class KibanaService(DockerService):
             'kibana.yml'
         ]
 
-    def prepare(self):
-        super().prepare()
-
         es_service = self.stack.get_service('elastic')
 
         self.environment['ELASTICSEARCH_HOSTS'] = es_service.node_url
