@@ -38,6 +38,7 @@ class DockerService(ABC):
         self.config: CommonDict = config
         self.root_pwd: Path = root_pwd
         self.logger: DockerStackLogger = stack.logger
+        self.ip = '127.0.0.1' if not self.config.virtual_ip else self.config.virtual_ip
 
         self.template_whitelist: list[str | tuple[str, str]] = []
         self.templates: dict[str, Template] = {}
@@ -154,7 +155,6 @@ class DockerService(ABC):
         self.logger.stack_info(f'loaded {len(self.template_whitelist)} {self.name} templates')
 
     def configure(self):
-        self.ip = '127.0.0.1' if not self.config.virtual_ip else self.config.virtual_ip
         self.config_subst['timestamp'] = str(datetime.now())
         for templ_path, template in self.templates.items():
             target = self.service_wd / templ_path
