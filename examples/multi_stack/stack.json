@@ -4,7 +4,7 @@
     "stack": [
         {
             "name": "elasticsearch",
-            "base": "https://raw.githubusercontent.com/guilledk/dockerstack/master/library/elasticsearch.json"
+            "base": "https://raw.githubusercontent.com/guilledk/dockerstack/master/library/elastic.json"
         },
         {
             "name": "kibana",
@@ -14,7 +14,7 @@
         },
         {
             "name": "redis",
-            "base": "https://raw.githubusercontent.com/guilledk/dockerstack/master/library/kibana.json",
+            "base": "https://raw.githubusercontent.com/guilledk/dockerstack/master/library/redis.json",
 
             "host": "127.0.0.1"
         }

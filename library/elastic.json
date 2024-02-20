@@ -2,7 +2,6 @@
     "name": "elasticsearch",
     "aliases": ["es", "elastic"],
     "docker_image": "docker.elastic.co/elasticsearch/elasticsearch:8.12.1",
-    "service_path": "elasticsearch",
     "user": "elasticsearch",
     "group": "elasticsearch",
     "mounts": [

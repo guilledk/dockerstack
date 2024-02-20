@@ -1,6 +1,5 @@
 {
     "docker_image": "redis:7",
-    "service_path": "redis",
     "user": "redis",
     "group": "redis",
     "mounts": [

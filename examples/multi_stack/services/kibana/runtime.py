@@ -15,7 +15,7 @@ class IndexPatternDict(BaseModel):
     time_field_name: str | None = None
 
 
-class KibanaDict(ServiceConfig):
+class KibanaConfig(ServiceConfig):
     host: str
     patterns: list[IndexPatternDict] = []
 
@@ -25,7 +25,7 @@ class KibanaService(DockerService):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.config: KibanaDict
+        self.config: KibanaConfig
 
         self.template_whitelist = [
             'kibana.yml'
@@ -36,9 +36,7 @@ class KibanaService(DockerService):
 
         es_service = self.stack.get_service('elastic')
 
-        es_host = es_service.config.protocol + f'://{es_service.ip}:{es_service.ports["http"]}'
-
-        self.environment['ELASTICSEARCH_HOSTS'] = es_host
+        self.environment['ELASTICSEARCH_HOSTS'] = es_service.node_url
 
     def start(self):
         kibana_port = self.config.ports['server']

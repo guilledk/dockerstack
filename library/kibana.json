@@ -1,6 +1,5 @@
 {
     "docker_image": "docker.elastic.co/kibana/kibana:8.12.1",
-    "service_path": "kibana",
     "entrypoint": ["/usr/local/bin/kibana-docker"],
     "user": "kibana",
     "group": "kibana",
