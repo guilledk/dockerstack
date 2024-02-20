@@ -4,8 +4,9 @@ import pytest
 
 from dockerstack.service import DockerService
 
+
 @pytest.mark.stack_config(
-    from_example='multi_stack',
+    from_template='examples/multi_stack',
     exist_ok=False, teardown=True
 )
 def test_multi_fresh(stack):
@@ -13,11 +14,11 @@ def test_multi_fresh(stack):
 
 
 @pytest.mark.stack_config(
-    from_example='multi_stack',
-    target_dir='tests/',
+    from_template='examples/multi_stack',
+    target_dir='tests/multi_stack',
     exist_ok=False, teardown=False
 )
-def test_multi_keep_alive_start(stack):
+def test_multi_keep_alive_start(fresh_target_dir, stack):
     assert stack.status == 'healthy'
 
 @pytest.mark.stack_config(
@@ -42,7 +43,6 @@ def test_multi_keep_alive_fix_unhealty(stack):
 
 @pytest.mark.stack_config(
     from_dir='tests/multi_stack',
-    target_dir='tests/multi_stack',
     exist_ok=True, teardown=True
 )
 def test_multi_keep_alive_stop(stack):
