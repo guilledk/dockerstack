@@ -176,36 +176,37 @@ class DockerService(ABC):
     def pre_start(self):
         # create service directories
         paths = [location for location in self.mkdirs]
-        ec, out = self.run_process(['mkdir', '-p', *paths])
-        if ec != 0:
-            raise DockerServiceError(
-                f'Couldn\'t create directories \"{paths}\", mkdir output: {out}')
-        self.logger.stack_info(f'created {len(paths)} dirs')
-
-        # set permissions & chown, with exclusions
-        exclude_dirs = ['__pycache__']
-        exclude_files_patterns = ['runtime.py']
-        for path in paths:
-            owner = self.mkdirs[path].owner or self.user
-            owner_group = self.mkdirs[path].owner_group or self.group
-            perms = self.mkdirs[path].permissions
-
-            exclude_dir_cmds = [' '.join(['-name', d, '-prune', '-o']) for d in exclude_dirs]
-            exclude_file_cmds = [' '.join(['-name', fp, '-prune', '-o']) for fp in exclude_files_patterns]
-
-            find_cmd = [
-                'find', path, '-type d',
-                *exclude_dir_cmds, '-true', '-o', '-type f',
-                *exclude_file_cmds, '-true',
-                '-exec', f'chown {owner}:{owner_group} {{}} +',
-                '-exec', f'chmod {perms} {{}} +'
-            ]
-            ec, out = self.run_in_shell(find_cmd)
+        if len(paths) > 0:
+            ec, out = self.run_process(['mkdir', '-p', *paths])
             if ec != 0:
                 raise DockerServiceError(
-                    f'Couldn\'t set perms on \"{path}\", output: {out}')
+                    f'Couldn\'t create directories \"{paths}\", mkdir output: {out}')
+            self.logger.stack_info(f'created {len(paths)} dirs')
 
-        self.logger.stack_info(f'set permissions for {len(paths)} dirs')
+            # set permissions & chown, with exclusions
+            exclude_dirs = ['__pycache__']
+            exclude_files_patterns = ['runtime.py']
+            for path in paths:
+                owner = self.mkdirs[path].owner or self.user
+                owner_group = self.mkdirs[path].owner_group or self.group
+                perms = self.mkdirs[path].permissions
+
+                exclude_dir_cmds = [' '.join(['-name', d, '-prune', '-o']) for d in exclude_dirs]
+                exclude_file_cmds = [' '.join(['-name', fp, '-prune', '-o']) for fp in exclude_files_patterns]
+
+                find_cmd = [
+                    'find', path, '-type d',
+                    *exclude_dir_cmds, '-true', '-o', '-type f',
+                    *exclude_file_cmds, '-true',
+                    '-exec', f'chown {owner}:{owner_group} {{}} +',
+                    '-exec', f'chmod {perms} {{}} +'
+                ]
+                ec, out = self.run_in_shell(find_cmd)
+                if ec != 0:
+                    raise DockerServiceError(
+                        f'Couldn\'t set perms on \"{path}\", output: {out}')
+
+            self.logger.stack_info(f'set permissions for {len(paths)} dirs')
 
         # create symlinks
         for link_src, link_dst in self.sym_links:
