@@ -19,8 +19,9 @@ class MkdirEntryDict(BaseModel):
     permissions: str = '644'
 
 
-class CommonDict(BaseModel):
+class ServiceConfig(BaseModel):
     name: str
+    base: str | None = None
     aliases: list[str] | None = None
     tag: str | None = None
     service_path: str
@@ -60,7 +61,8 @@ class CommonDict(BaseModel):
         return values
 
 
-class LogsConfig(BaseModel):
+class LogrotateConfig(BaseModel):
+    enabled: bool = False
     dirs: list[str] = [ '/logs' ]
     interval: str = 'daily'
     copies: int = 14
@@ -68,9 +70,9 @@ class LogsConfig(BaseModel):
     compression: Literal['compress'] | Literal['nocompress'] = 'compress'
 
 
-class ConfigDict(BaseModel):
+class StackConfig(BaseModel):
     name: str
     services: list[str]
     network: str | None = None
     stack: list[dict[str, Any]]
-    logs: LogsConfig = LogsConfig()
+    logs: LogrotateConfig = LogrotateConfig()

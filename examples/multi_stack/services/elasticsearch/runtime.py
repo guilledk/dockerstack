@@ -2,11 +2,11 @@
 
 import requests
 
-from dockerstack.typing import CommonDict
+from dockerstack.typing import ServiceConfig
 from dockerstack.service import DockerService
 
 
-class ElasticsearchDict(CommonDict):
+class ElasticsearchConfig(ServiceConfig):
     protocol: str
     cluster_name: str = 'es-cluster'
     node_name: str = 'es-example'
@@ -17,7 +17,9 @@ class ElasticsearchService(DockerService):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.config: ElasticsearchDict
+        self.config: ElasticsearchConfig
+
+        self.node_url = f'{self.config.protocol}://{self.ip}:{self.ports["http"]}/_cluster/health'
 
         self.template_whitelist = [
             'elasticsearch.yml'
@@ -25,9 +27,8 @@ class ElasticsearchService(DockerService):
 
     @property
     def status(self) -> str:
-        url = f'{self.config.protocol}://{self.ip}:{self.ports["http"]}/_cluster/health'
         try:
-            response = requests.get(url)
+            response = requests.get(self.node_url)
             response.raise_for_status()
 
         except requests.RequestException:

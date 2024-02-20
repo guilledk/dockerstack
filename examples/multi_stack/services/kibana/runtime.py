@@ -6,7 +6,7 @@ import requests
 import simplejson.errors as sj_errors
 
 from pydantic import BaseModel
-from dockerstack.typing import CommonDict
+from dockerstack.typing import ServiceConfig
 from dockerstack.service import DockerService
 
 
@@ -15,7 +15,7 @@ class IndexPatternDict(BaseModel):
     time_field_name: str | None = None
 
 
-class KibanaDict(CommonDict):
+class KibanaDict(ServiceConfig):
     host: str
     patterns: list[IndexPatternDict] = []
 

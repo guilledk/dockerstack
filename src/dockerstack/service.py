@@ -20,7 +20,7 @@ from .utils import (
     docker_open_process, docker_wait_process, docker_stream_logs, docker_stop
 )
 from .errors import DockerServiceError
-from .typing import CommonDict, MkdirEntryDict
+from .typing import ServiceConfig, MkdirEntryDict
 from .logging import DockerStackLogger
 
 
@@ -29,13 +29,13 @@ class DockerService(ABC):
     def __init__(
         self,
         stack: 'DockerStack',
-        config: CommonDict,
+        config: ServiceConfig,
         root_pwd: Path
     ):
         self.stack: 'DockerStack' = stack
         self.name: str = config.name
         self.tag: str = config.tag if config.tag is not None else 'dockerstack'
-        self.config: CommonDict = config
+        self.config: ServiceConfig = config
         self.root_pwd: Path = root_pwd
         self.logger: DockerStackLogger = stack.logger
         self.ip = '127.0.0.1' if not self.config.virtual_ip else self.config.virtual_ip

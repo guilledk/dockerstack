@@ -2,11 +2,11 @@
 
 import socket
 
-from dockerstack.typing import CommonDict
+from dockerstack.typing import ServiceConfig
 from dockerstack.service import DockerService
 
 
-class RedisDict(CommonDict):
+class RedisDict(ServiceConfig):
     host: str
 
 

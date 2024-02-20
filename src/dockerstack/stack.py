@@ -23,6 +23,7 @@ from docker.types import Mount, LogConfig, IPAMConfig, IPAMPool
 from docker.models.images import Image
 from docker.models.containers import Container
 from docker.models.networks import Network
+from requests import request
 
 from dockerstack.utils import (
     docker_build_image, docker_pull_image,
@@ -33,7 +34,7 @@ from dockerstack.utils import (
 
 
 from .errors import DockerStackException
-from .typing import CommonDict, ConfigDict
+from .typing import ServiceConfig, StackConfig
 from .service import DockerService
 from .logging import DockerStackLogger, get_stack_logger
 
@@ -56,11 +57,11 @@ class DockerStack:
     ):
         self.pid = os.getpid()
         self.client: DockerClient = docker.from_env()
-        self.config: ConfigDict
+        self.config: StackConfig
         self.network: Network | None
 
         self.services = SimpleNamespace()
-        self.service_configs: dict[str, CommonDict] = {}
+        self.service_configs: dict[str, ServiceConfig] = {}
         self.ordered_services: list[DockerService] = []
 
         self.logger: DockerStackLogger
@@ -144,7 +145,7 @@ class DockerStack:
         else:
             config = deepcopy(config)
 
-        self.config = ConfigDict(**config)
+        self.config = StackConfig(**config)
 
         # darwin arch doesn't support host networking mode...
         if self.config.network or sys.platform == 'darwin':
@@ -171,7 +172,7 @@ class DockerStack:
 
         return service_conf
 
-    def get_service_config(self, alias: str) -> CommonDict:
+    def get_service_config(self, alias: str) -> ServiceConfig:
         service_name = self.service_alias_to_name(alias)
 
         if service_name not in self.service_configs:
@@ -202,10 +203,18 @@ class DockerStack:
                 if issubclass(obj, DockerService):
                     service_class = obj
 
-                elif issubclass(obj, CommonDict):
+                elif issubclass(obj, ServiceConfig) and obj is not ServiceConfig:
                     service_conf_class = obj
 
         if service_class and service_conf_class:
+
+            if service_conf['base']:
+                # use remote json as service config base
+                base_conf_resp = request.get(service_conf['base'])
+                base_conf_resp.raise_for_status()
+
+                service_conf.update(**base_conf_resp)
+
             service_conf = service_conf_class(**service_conf)
             self.service_configs[service_name] = service_conf
 
@@ -390,7 +399,7 @@ class DockerStack:
             return getattr(self.services, service).ip
 
         if service in self.config.model_dump():
-            config: CommonDict = getattr(self.config, service)
+            config: ServiceConfig = getattr(self.config, service)
             return '127.0.0.1' if not config.virtual_ip else config.virtual_ip
 
         raise AttributeError('Couldn\'t figure out ip for {service}')
@@ -524,15 +533,13 @@ class DockerStack:
     def start(self, exist_ok: bool = False, repair: bool = True):
         self.logger.stack_info(f'{self.config.name} starting...')
 
-        need_logrotator: bool = False
         try:
             for service in self.ordered_services:
                 service.load_templates()
                 service.configure()
                 self.get_service_image(service.name)
-                need_logrotator |= service.config.log_file is not None
 
-            if need_logrotator:
+            if self.config.logs.enabled:
                 self._maybe_setup_logrotate()
 
             for service in self.ordered_services:
@@ -569,6 +576,16 @@ class DockerStack:
         service.load_templates()
         service.configure()
         self.get_service_image(service.name)
+
+        # check that required services are healthy
+        for req_alias in service.config.requires:
+            req_service = self.get_service(req_alias)
+
+            self.logger.stack_info(f'checking required service {req_service} is running & healthy...')
+
+            if not req_service.running or not req_service.status == 'healthy':
+                self.restart_service(req_service)
+
         self.launch_service(service)
         self.logger.stack_info(f'restarted {service}')
 

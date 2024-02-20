@@ -1,0 +1,21 @@
+{
+    "docker_image": "redis:7",
+    "service_path": "redis",
+    "user": "redis",
+    "group": "redis",
+    "mounts": [
+        {
+            "name": "data",
+            "source": "redis_data",
+            "target": "/data",
+            "mtype": "bind"
+        }
+    ],
+    "ports": {
+        "bind": 6379
+    },
+    "sym_links": [
+        ["/home/redis/redis.conf", "/usr/local/etc/redis/redis.conf"]
+    ],
+    "startup_phrase": "Ready to accept connections"
+}
