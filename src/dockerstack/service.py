@@ -69,8 +69,12 @@ class DockerService(ABC):
         self.user = config.user
         self.group = config.group
 
+        serv_path: str = self.name
+        if isinstance(config.service_path, str):
+            serv_path = config.service_path
+
         self.services_wd: Path = root_pwd / 'services'
-        self.service_wd: Path = self.services_wd / config.service_path
+        self.service_wd: Path = self.services_wd / serv_path
 
         self.log_file: str = f'{self.name}.log'
         if isinstance(config.log_file, str):

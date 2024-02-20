@@ -23,7 +23,7 @@ from docker.types import Mount, LogConfig, IPAMConfig, IPAMPool
 from docker.models.images import Image
 from docker.models.containers import Container
 from docker.models.networks import Network
-from requests import request
+import requests
 
 from dockerstack.utils import (
     docker_build_image, docker_pull_image,
@@ -125,10 +125,6 @@ class DockerStack:
         with open(config_file, 'w+') as config_file:
             config_file.write(json.dumps(self.config.model_dump(), indent=4))
 
-    def update_configs(self):
-        for service in vars(self.services).values():
-            service.load_config()
-
     def load_config(
         self,
         name: str = 'stack.json',
@@ -157,7 +153,6 @@ class DockerStack:
         else:
             self.network = None
 
-        self.update_configs()
 
     def _get_raw_service_config(self, alias: str) -> dict[str, Any]:
         service_name = self.service_alias_to_name(alias)
@@ -169,6 +164,13 @@ class DockerStack:
 
         if not service_conf:
             raise DockerStackException(f'Raw config for service {service_name} not found!')
+
+        if 'base' in service_conf:
+            # use remote json as service config base
+            base_conf_resp = requests.get(service_conf['base'])
+            base_conf_resp.raise_for_status()
+
+            service_conf.update(**(base_conf_resp.json()))
 
         return service_conf
 
@@ -183,6 +185,7 @@ class DockerStack:
     def construct_service(self, alias: str) -> DockerService:
         service_name = self.service_alias_to_name(alias)
         service_conf = self._get_raw_service_config(alias)
+
         service_wd = self.services_wd / service_conf['service_path']
 
         spec = importlib.util.spec_from_file_location(service_name, service_wd / 'runtime.py')
@@ -207,14 +210,6 @@ class DockerStack:
                     service_conf_class = obj
 
         if service_class and service_conf_class:
-
-            if service_conf['base']:
-                # use remote json as service config base
-                base_conf_resp = request.get(service_conf['base'])
-                base_conf_resp.raise_for_status()
-
-                service_conf.update(**base_conf_resp)
-
             service_conf = service_conf_class(**service_conf)
             self.service_configs[service_name] = service_conf
 

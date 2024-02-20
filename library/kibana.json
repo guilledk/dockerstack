@@ -17,7 +17,7 @@
     "sym_links": [
         ["/home/kibana/kibana.yml", "/usr/share/kibana/config/kibana.yml"]
     ],
-    "requires": ["elastic"],
+    "requires": ["elasticsearch"],
     "startup_phrase": "Kibana is now available",
     "startup_logs_kwargs": {"lines": 0, "from_latest": true, "timeout": 60}
 }

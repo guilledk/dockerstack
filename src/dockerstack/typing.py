@@ -24,7 +24,7 @@ class ServiceConfig(BaseModel):
     base: str | None = None
     aliases: list[str] | None = None
     tag: str | None = None
-    service_path: str
+    service_path: str | None = None
     log_file: str | None = None
     docker_image: str | None = None
     docker_file: str | None = None
