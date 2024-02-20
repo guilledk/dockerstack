@@ -575,8 +575,9 @@ class DockerStack:
     def stop(self):
         self.logger.stack_info(f'{self.config.name} is stopping...')
         for service in vars(self.services).values():
-            service.stop()
-            self.logger.stack_info(f'stopped {service.name}')
+            if service.running:
+                service.stop()
+                self.logger.stack_info(f'stopped {service.name}')
 
         self._maybe_stop_logrotate()
 
