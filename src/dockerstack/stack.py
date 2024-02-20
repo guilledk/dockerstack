@@ -16,6 +16,8 @@ from contextlib import contextmanager
 
 import docker
 import docker.errors as docker_errors
+
+import requests
 import networkx as nx
 
 from docker import DockerClient
@@ -23,18 +25,17 @@ from docker.types import Mount, LogConfig, IPAMConfig, IPAMPool
 from docker.models.images import Image
 from docker.models.containers import Container
 from docker.models.networks import Network
-import requests
 
 from dockerstack.utils import (
     docker_build_image, docker_pull_image,
     docker_get_running_container,
     docker_stream_logs,
-    docker_stop
+    docker_stop, download_www_file
 )
 
 
 from .errors import DockerStackException
-from .typing import ServiceConfig, StackConfig
+from .typing import ServiceConfig, StackConfig, WWWFileParams
 from .service import DockerService
 from .logging import DockerStackLogger, get_stack_logger
 
@@ -154,7 +155,10 @@ class DockerStack:
             self.network = None
 
 
-    def _get_raw_service_config(self, alias: str) -> dict[str, Any]:
+    def _get_raw_service_config(
+        self,
+        alias: str
+    ) -> dict[str, Any]:
         service_name = self.service_alias_to_name(alias)
         service_conf = None
         for service in self.config.stack:
@@ -166,11 +170,32 @@ class DockerStack:
             raise DockerStackException(f'Raw config for service {service_name} not found!')
 
         if 'base' in service_conf:
-            # use remote json as service config base
-            base_conf_resp = requests.get(service_conf['base'])
-            base_conf_resp.raise_for_status()
+            # define cache directory
+            cache_dir = (
+                Path(self.config.cache_dir) / 'library').expanduser().resolve()
+            cache_dir.mkdir(parents=True, exist_ok=True)
 
-            service_conf.update(**(base_conf_resp.json()))
+            file_name = service_conf['name'] + '.json'
+
+            cache_file_path = (cache_dir / file_name).resolve()
+
+            base_conf: dict
+            if cache_file_path.exists():
+                # load from cache
+                with open(cache_file_path, 'r') as cache_file:
+                    base_conf = json.load(cache_file)
+
+            else:
+                # use remote json as service config base
+                base_conf_resp = requests.get(service_conf['base'])
+                base_conf_resp.raise_for_status()
+
+                base_conf = base_conf_resp.json()
+
+                with open(cache_file_path, 'w+') as cache_file:
+                    cache_file.write(json.dumps(base_conf, indent=4))
+
+            service_conf.update(**base_conf)
 
         return service_conf
 
@@ -191,37 +216,58 @@ class DockerStack:
             serv_path = service_name
 
         service_wd = self.services_wd / serv_path
+        service_wd.mkdir(parents=True, exist_ok=True)
 
-        spec = importlib.util.spec_from_file_location(service_name, service_wd / 'runtime.py')
-        if spec is None:
-            raise ImportError(f"Could not load spec for {alias} from {service_wd}")
+        if 'www_files' in service_conf:
+            # ensure www files are in dir
+            for www_file in service_conf['www_files']:
+                www_file = WWWFileParams(**www_file)
 
-        module = importlib.util.module_from_spec(spec)
-        if spec.loader is not None:
-            spec.loader.exec_module(module)
+                target_path = service_wd
+                if www_file.target_dir:
+                    target_path = Path(www_file.target_dir)
 
-        else:
-            raise ImportError(f"Failed to load module {alias} from {service_wd}")
+                try:
+                    download_www_file(
+                        www_file.url,
+                        target_path,
+                        logger=self.logger,
+                        cache_dir_path=Path(self.config.cache_dir) / 'files'
+                    )
 
-        service_class = None
-        service_conf_class = None
-        for _, obj in inspect.getmembers(module):
-            if inspect.isclass(obj):
-                if issubclass(obj, DockerService):
-                    service_class = obj
+                except BaseException as e:
+                    raise DockerStackException(f'Failed to download {www_file.url}, {e}')
 
-                elif issubclass(obj, ServiceConfig) and obj is not ServiceConfig:
-                    service_conf_class = obj
+        service_spec_path = service_wd / 'runtime.py'
+        service_class = DockerService
+        service_conf_class = ServiceConfig
 
-        if service_class and service_conf_class:
-            service_conf = service_conf_class(**service_conf)
-            self.service_configs[service_name] = service_conf
+        if service_spec_path.exists():
+            spec = importlib.util.spec_from_file_location(service_name, service_spec_path)
+            if spec is None:
+                raise ImportError(f"Could not load spec for {alias} from {service_wd}")
 
-            return service_class(
-                self, service_conf, self.root_pwd)
+            module = importlib.util.module_from_spec(spec)
+            if spec.loader is not None:
+                spec.loader.exec_module(module)
 
-        else:
-            raise DockerStackException(f'Could not construct service from {service_wd}/runtime.py')
+            else:
+                raise ImportError(f"Failed to load module {alias} from {service_wd}")
+
+            for _, obj in inspect.getmembers(module):
+                if inspect.isclass(obj):
+                    if issubclass(obj, DockerService):
+                        service_class = obj
+
+                    elif issubclass(obj, ServiceConfig) and obj is not ServiceConfig:
+                        service_conf_class = obj
+
+        service_conf = service_conf_class(**service_conf)
+        self.service_configs[service_name] = service_conf
+
+        return service_class(
+            self, service_conf, self.root_pwd)
+
 
     def get_service(self, alias: str) -> DockerService:
         service_name = self.service_alias_to_name(alias)
@@ -431,10 +477,10 @@ class DockerStack:
 
             self.logger.stack_info(
                 f'waiting until phrase \"{phrase}\" is present '
-                f'in {serv.name} logs (max wait time: {serv.startup_logs_kwargs["timeout"]} sec)')
+                f'in {serv.name} logs (max wait time: {serv.startup_logs_kwargs.timeout} sec)')
 
             found_phrase = False
-            for msg in serv.stream_logs(**serv.startup_logs_kwargs):
+            for msg in serv.stream_logs(**serv.startup_logs_kwargs.model_dump()):
                 if serv.config.show_startup:
                     self.logger.stack_info(msg.rstrip())
 

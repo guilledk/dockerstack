@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 
+import os
 import time
 import json
+import lzma
+import shutil
 import random
 import string
 import struct
 import socket
 import logging
 import tarfile
+import zipfile
 
 from string import Template
 from typing import Callable, Iterator, Generator
@@ -17,6 +21,7 @@ from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import HTTPConnectionPool
 
 import requests
+import zstandard as zstd
 import docker.errors as docker_errors
 
 from docker import DockerClient
@@ -44,6 +49,7 @@ def write_templated_file(target_dir: Path, template: Template, subst: dict) -> N
     with open(target_dir, 'w+') as target_file:
         target_file.write(template.substitute(**subst))
 
+
 def get_free_port(tries: int = 10) -> int:
     _min = 10000
     _max = 60000
@@ -58,11 +64,140 @@ def get_free_port(tries: int = 10) -> int:
             s.bind(("127.0.0.1", port_num))
             s.close()
 
-        except socket.error as e:
+        except socket.error:
             continue
 
         else:
             return port_num
+
+    raise OSError(f'Couldn\'t find a free port?!')
+
+
+def download_www_file(
+    url: str,
+    target_path: Path,
+    logger: logging.Logger | None = None,
+    force: bool = False,
+    cache_dir_path: Path | str = '~/.cache/dockerstack/files'
+) -> Path:
+
+    # define cache directory
+    cache_dir = Path(cache_dir_path).expanduser().resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # determine the file name, handling potential redirects
+    response = requests.head(url, allow_redirects=True)
+    if 'Content-Disposition' in response.headers:
+        file_name = response.headers['Content-Disposition'].split('filename=')[-1].strip('"')
+    else:
+        file_name = url.split('/')[-1]
+
+    cache_file_path = (cache_dir / file_name).resolve()
+    target_file_path = target_path / file_name
+
+    # check if target already has a valid file or symlink
+    if (target_file_path.exists() or target_file_path.is_symlink()) and not force:
+        if logger:
+            logger.info(f'file or symlink already exists at target: {target_file_path}')
+
+        return target_file_path
+
+    # check if file is in cache and not forcing re-download
+    if cache_file_path.exists() and not force:
+        if logger:
+            logger.info(f'file found in cache: {cache_file_path}')
+
+        # copy cached file to target path
+        shutil.copy(cache_file_path, target_file_path)
+        return target_file_path
+
+    # download the file since it's not in cache or force is True
+    if logger:
+        logger.info(f'starting download of {url}')
+
+    last_reported: int = 0
+    with requests.get(url, stream=True) as r:
+        total_length = int(r.headers.get('content-length', 0))
+        with open(cache_file_path, 'wb') as f:
+            downloaded = 0
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:  # filter out keep-alive new chunks
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    percent = 100 * downloaded / total_length
+                    int_percent = int(percent)
+                    if logger and last_reported != int_percent and int_percent % 10 == 0:
+                        logger.info(f'downloaded {int_percent}%')
+                        last_reported = int_percent
+
+    # decompress/extract if necessary and handle caching for decompressed files
+    final_path = decompress_extract(cache_file_path, cache_dir, logger)
+
+    # if the final path differs from the cache file path, create a symlink for decompressed files
+    if final_path != cache_file_path:
+        if cache_file_path.exists() or cache_file_path.is_symlink():
+            cache_file_path.unlink()
+
+        os.symlink(final_path, cache_file_path)
+
+    # if the final decompressed file has a different name, create a symlink at the target
+    if final_path.name != file_name:
+        symlink_path = target_path / file_name
+        if symlink_path.exists() or symlink_path.is_symlink():
+            symlink_path.unlink()
+
+        symlink_path.symlink_to(final_path.name)
+
+    # copy the final file/dir/symlink target to the target path
+    final_path = final_path.resolve(strict=True)
+    if final_path.is_dir():
+        shutil.copytree(final_path, target_file_path)
+
+    else:
+        shutil.copy(final_path.resolve(), target_file_path)
+
+    if logger:
+        logger.info(f'www file ready at {target_file_path}')
+
+    return target_file_path
+
+
+def decompress_extract(file_path: Path, target_path: Path, logger=None) -> Path:
+    if file_path.suffix in ['.tar', '.tar.gz', '.tar.xz', '.tgz']:
+        with tarfile.open(file_path, 'r:*') as tar:
+            tar.extractall(path=target_path)
+            if logger:
+                logger.info(f'extracted tar archive to {target_path}')
+
+    elif file_path.suffix == '.zip':
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            zip_ref.extractall(target_path)
+            if logger:
+                logger.info(f'extracted zip archive to {target_path}')
+
+    elif file_path.suffix == '.xz' and lzma is not None:
+        with lzma.open(file_path) as f, open(target_path / file_path.stem, 'wb') as fout:
+            shutil.copyfileobj(f, fout)
+            if logger:
+                logger.info(f'decompressed xz file to {fout.name}')
+
+    elif file_path.suffix == '.zst' and zstd is not None:
+        dctx = zstd.ZstdDecompressor()
+        with open(file_path, 'rb') as f, open(target_path / file_path.stem, 'wb') as fout, dctx.stream_reader(f) as reader:
+            shutil.copyfileobj(reader, fout)
+            if logger:
+                logger.info(f'decompressed zstd file to {fout.name}')
+
+    else:
+        if logger:
+            logger.info(f'no decompression or extraction needed for {file_path}')
+
+        return target_path / file_path.stem
+
+    # cleanup original archive file
+    file_path.unlink()
+
+    return target_path / file_path.stem
 
 
 # docker helpers

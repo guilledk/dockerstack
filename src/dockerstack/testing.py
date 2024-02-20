@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 
+import os
 import shutil
 
 from typing import Generator
 from pathlib import Path
 
 import pdbp
-from pydantic import BaseModel, model_validator
 import pytest
+import docker
 
+from docker.types import Mount
+from pydantic import BaseModel, model_validator
 from dockerstack.stack import DockerStack
 
 
@@ -64,13 +67,8 @@ class StackFixtureParams(StackFixtureParamsBase):
         return StackFixtureParams(**stack_config)
 
 
-import os
-import docker
-from docker.types import Mount
-
 @pytest.fixture
-def fresh_target_dir(request):
-
+def fresh_target_dir(request) -> None:
     config = StackFixtureParams.from_pytest_marks(request)
 
     if not isinstance(config.from_template, str):
@@ -85,8 +83,8 @@ def fresh_target_dir(request):
     if target_path.exists():
         # * flashes TCD testing bureau badge *: im commandeering this directory
         client = docker.from_env()
-        user = os.getuid()
-        group = os.getgid()
+        user: int = os.getuid()
+        group: int = os.getgid()
 
         cmd = ['chown', '-R', f'{user}:{group}', '/target']
 
@@ -97,7 +95,7 @@ def fresh_target_dir(request):
         )
 
         # make sure chown worked
-        stat = target_path.stat()
+        stat: os.stat_result = target_path.stat()
         assert stat.st_uid == user
         assert stat.st_gid == group
 

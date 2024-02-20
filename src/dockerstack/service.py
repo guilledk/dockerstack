@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 
-from abc import ABC, abstractproperty
 from string import Template
 from typing import Any, Iterator, Generator
 from pathlib import Path
@@ -20,11 +19,11 @@ from .utils import (
     docker_open_process, docker_wait_process, docker_stream_logs, docker_stop
 )
 from .errors import DockerServiceError
-from .typing import ServiceConfig, MkdirEntryDict
+from .typing import ServiceConfig, MkdirEntryDict, StartupKwargs
 from .logging import DockerStackLogger
 
 
-class DockerService(ABC):
+class DockerService:
 
     def __init__(
         self,
@@ -63,7 +62,7 @@ class DockerService(ABC):
 
         self.command: list[str] | None = None
 
-        self.startup_logs_kwargs: dict[str, Any] = config.startup_logs_kwargs
+        self.startup_logs_kwargs: StartupKwargs = config.startup_logs_kwargs
 
         self.shell = config.shell
         self.user = config.user
@@ -333,6 +332,6 @@ class DockerService(ABC):
 
         return False
 
-    @abstractproperty
+    @property
     def status(self) -> str:
-        ...
+        return 'healthy'

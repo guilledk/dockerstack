@@ -13,10 +13,24 @@ class MountDict(BaseModel):
     target: str
     mtype: str = Field('bind', alias='type')
 
+
+class StartupKwargs(BaseModel):
+    lines: int = 0
+    from_latest: bool = True
+    timeout: int = 10
+
+
 class MkdirEntryDict(BaseModel):
     owner: str | None = None
     owner_group: str | None = None
     permissions: str = '644'
+
+
+class WWWFileParams(BaseModel):
+    url: str
+    target_dir: str | None = None
+    rename: str | None = None
+    decompress: bool = True
 
 
 class ServiceConfig(BaseModel):
@@ -37,9 +51,10 @@ class ServiceConfig(BaseModel):
     env: dict[str, str] = {}
     mkdirs: dict[str, MkdirEntryDict] = {}
     sym_links: list[tuple[str, str]] = []
+    www_files: list[WWWFileParams] = []
     virtual_ip: str | None = None
     startup_phrase: str | None = None
-    startup_logs_kwargs: dict[str, Any] = {'lines': 0, 'from_latest': True, 'timeout': 10}
+    startup_logs_kwargs: StartupKwargs = StartupKwargs()
     wait_startup: bool = True
     show_startup: bool = False
     show_build: bool = True
@@ -74,5 +89,6 @@ class StackConfig(BaseModel):
     name: str
     services: list[str]
     network: str | None = None
-    stack: list[dict[str, Any]]
     logs: LogrotateConfig = LogrotateConfig()
+    cache_dir: str = '~/.cache/dockerstack'
+    stack: list[dict[str, Any]]

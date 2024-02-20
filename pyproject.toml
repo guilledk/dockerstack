@@ -13,6 +13,7 @@ pydantic = "^2.6.1"
 docker = "^7.0.0"
 networkx = "^3.2.1"
 simplejson = "^3.19.2"
+zstandard = "^0.22.0"
 
 [tool.poetry.group.dev.dependencies]
 pdbp = "^1.5.0"

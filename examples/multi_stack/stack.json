@@ -1,6 +1,6 @@
 {
     "name": "example_multi_stack",
-    "services": ["kibana", "redis"],
+    "services": ["tester"],
     "stack": [
         {
             "name": "elasticsearch",
@@ -17,7 +17,14 @@
             "base": "https://raw.githubusercontent.com/guilledk/dockerstack/master/library/redis.json",
 
             "host": "127.0.0.1"
+        },
+        {
+            "name": "tester",
+            "docker_image": "python:3.12",
+            "www_files": [
+                {"url": "https://ops.store.eosnation.io/telos-snapshots-v6/snapshot-2018-12-16-14-telos-v6-0000482409.bin.zst"}
+            ],
+            "requires": ["kibana", "redis"]
         }
-
     ]
 }
