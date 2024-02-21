@@ -22,7 +22,21 @@
             "name": "tester",
             "docker_image": "python:3.12",
             "www_files": [
-                {"url": "https://ops.store.eosnation.io/telos-snapshots-v6/snapshot-2018-12-16-14-telos-v6-0000482409.bin.zst"}
+                {
+                    "url": "https://github.com/guilledk/dockerstack/archive/refs/heads/master.zip"
+                },
+                {
+                    "url": "https://github.com/guilledk/dockerstack/archive/refs/heads/master.zip",
+                    "rename": "dockerstack-master-2"
+                },
+                {
+                    "url": "https://ops.store.eosnation.io/telos-snapshots-v6/snapshot-2018-12-16-14-telos-v6-0000482409.bin.zst",
+                    "rename": "mainnet-early-snapshot.bin"
+                },
+                {
+                    "url": "https://telos-snapshots.s3.amazonaws.com/mainnet/telos-mainet-20211026-blk-180635436.tar.gz",
+                    "rename": "mainnet-deploy-snapshot.bin"
+                }
             ],
             "requires": ["kibana", "redis"]
         }

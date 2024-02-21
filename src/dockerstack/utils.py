@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 
-import os
 import time
 import json
-import lzma
 import shutil
 import random
 import string
@@ -11,7 +9,6 @@ import struct
 import socket
 import logging
 import tarfile
-import zipfile
 
 from string import Template
 from typing import Callable, Iterator, Generator
@@ -21,12 +18,13 @@ from urllib3.connection import HTTPConnection
 from urllib3.connectionpool import HTTPConnectionPool
 
 import requests
-import zstandard as zstd
 import docker.errors as docker_errors
 
 from docker import DockerClient
 from docker.models.containers import Container
 from requests.adapters import HTTPAdapter
+
+from .cache import CacheDir
 
 
 def random_string(size=256) -> str:
@@ -73,131 +71,181 @@ def get_free_port(tries: int = 10) -> int:
     raise OSError(f'Couldn\'t find a free port?!')
 
 
+def humanize_bytesize(byte_size: int) -> str:
+    '''
+    Convert a byte size into a human-readable string.
+    '''
+    # Define the suffixes for each scale
+    suffixes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
+    i = 0
+    double_byte_size = byte_size
+
+    # scale the bytes until the appropriate suffix is found
+    while (double_byte_size >= 1024) and (i < len(suffixes)-1):
+        double_byte_size /= 1024.0
+        i += 1
+
+    # format and return the human-readable string
+    f = ('%.2f' % double_byte_size).rstrip('0').rstrip('.')
+    return f'{f} {suffixes[i]}'
+
+
+def is_compressed(
+    file_path: Path | str,
+) -> bool:
+    try:
+        file_path = Path(
+            file_path).expanduser().resolve(strict=True)
+
+    except FileNotFoundError:
+        return False
+
+    _zip_suffixes = ['.zip']
+
+    _lzma_suffixes = ['.xz', '.gz', '.bz2']
+
+    _zstd_suffixes = ['.zst', '.zstd']
+
+    _tar_suffixes = ['.tar'] + [
+        '.tar' + suffix
+        for suffix in _lzma_suffixes + _zstd_suffixes
+    ] + [
+        '.t' + suffix[1:]
+        for suffix in _lzma_suffixes + _zstd_suffixes
+    ]
+
+    _all_suffixes = (
+        _tar_suffixes + _zip_suffixes + _lzma_suffixes + _zstd_suffixes
+    )
+
+    return any([suffix in file_path.name for suffix in _all_suffixes])
+
+
 def download_www_file(
     url: str,
     target_path: Path,
+    cache_dir: CacheDir,
+    rename: str | None = None,
     logger: logging.Logger | None = None,
     force: bool = False,
-    cache_dir_path: Path | str = '~/.cache/dockerstack/files'
 ) -> Path:
 
-    # define cache directory
-    cache_dir = Path(cache_dir_path).expanduser().resolve()
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    class DownloadError(BaseException):
+        ...
+
+    # final desired file name
+    # rename overrides it, if not it will be same as actual_name
+    file_name: str | None = rename
 
     # determine the file name, handling potential redirects
+    # if not found slash url
+    actual_name: str
     response = requests.head(url, allow_redirects=True)
     if 'Content-Disposition' in response.headers:
-        file_name = response.headers['Content-Disposition'].split('filename=')[-1].strip('"')
-    else:
-        file_name = url.split('/')[-1]
+        actual_name = response.headers['Content-Disposition'].split('filename=')[-1].strip('"')
 
-    cache_file_path = (cache_dir / file_name).resolve()
-    target_file_path = target_path / file_name
+    else:
+        actual_name = url.split('/')[-1]
+
+    if not isinstance(file_name, str):
+        file_name = actual_name
+
+    # cache file path should be actual name
+    cache_file_path = f'files/{actual_name}'
 
     # check if target already has a valid file or symlink
+    target_file_path = target_path / file_name
     if (target_file_path.exists() or target_file_path.is_symlink()) and not force:
         if logger:
             logger.info(f'file or symlink already exists at target: {target_file_path}')
 
-        return target_file_path
+        return target_file_path.resolve()
 
     # check if file is in cache and not forcing re-download
-    if cache_file_path.exists() and not force:
+    cache_file_path_abs = cache_dir.get_path(cache_file_path)
+    if cache_file_path_abs.exists():
         if logger:
             logger.info(f'file found in cache: {cache_file_path}')
 
         # copy cached file to target path
-        shutil.copy(cache_file_path, target_file_path)
+        if cache_file_path_abs.is_dir():
+            shutil.copytree(cache_file_path_abs, target_file_path)
+
+        else:
+            shutil.copy(cache_file_path_abs, target_file_path)
+
         return target_file_path
 
     # download the file since it's not in cache or force is True
     if logger:
         logger.info(f'starting download of {url}')
 
+    download_location = cache_dir.get_path(cache_file_path)
+
     last_reported: int = 0
     with requests.get(url, stream=True) as r:
         total_length = int(r.headers.get('content-length', 0))
-        with open(cache_file_path, 'wb') as f:
+        total_length_h = humanize_bytesize(total_length)
+
+        if total_length == 0 and logger:
+            logger.info(f'unknown size, no content-length header...')
+
+        with open(download_location, 'wb') as f:
             downloaded = 0
             for chunk in r.iter_content(chunk_size=8192):
+                if not chunk:
+                    continue
+
                 if chunk:  # filter out keep-alive new chunks
                     f.write(chunk)
                     downloaded += len(chunk)
+
+                if logger and total_length != 0:
                     percent = 100 * downloaded / total_length
                     int_percent = int(percent)
-                    if logger and last_reported != int_percent and int_percent % 10 == 0:
-                        logger.info(f'downloaded {int_percent}%')
+                    if last_reported == int_percent:
+                        continue
+
+                    if int_percent % 10 == 0:
+                        downloaded_h = humanize_bytesize(downloaded)
+                        logger.info(f'{file_name} {downloaded_h}/{total_length_h} {int_percent}%')
                         last_reported = int_percent
 
-    # decompress/extract if necessary and handle caching for decompressed files
-    final_path = decompress_extract(cache_file_path, cache_dir, logger)
+    cache_final_path = download_location
 
-    # if the final path differs from the cache file path, create a symlink for decompressed files
-    if final_path != cache_file_path:
-        if cache_file_path.exists() or cache_file_path.is_symlink():
-            cache_file_path.unlink()
+    # handle compressed files
+    if is_compressed(download_location):
+        extract_target = Path(cache_file_path).parent
+        extracted = cache_dir.extract_file(cache_file_path)
 
-        os.symlink(final_path, cache_file_path)
+        if len(extracted) > 1:
+            raise DownloadError(f'Multi file decompress not supported atm')
 
-    # if the final decompressed file has a different name, create a symlink at the target
-    if final_path.name != file_name:
-        symlink_path = target_path / file_name
-        if symlink_path.exists() or symlink_path.is_symlink():
-            symlink_path.unlink()
+        extracted = extracted[0]
 
-        symlink_path.symlink_to(final_path.name)
+        cache_final_path = cache_dir.get_path(str(extract_target / extracted))
 
-    # copy the final file/dir/symlink target to the target path
-    final_path = final_path.resolve(strict=True)
-    if final_path.is_dir():
-        shutil.copytree(final_path, target_file_path)
+        if not rename:
+            target_file_path = target_file_path.parent / extracted
+
+    # sanity check
+    if not cache_final_path.exists():
+        raise DownloadError(
+            f'Final cache path ({cache_final_path}) doesn\'t exist!?')
+
+    # if in cache the final path name differs from the actual
+    if cache_final_path.name != actual_name:
+        cache_dir.create_alias(
+            str(cache_final_path.relative_to(cache_dir.root_dir)), cache_file_path)
+
+    # copy the final cached file/dir to the target path
+    if cache_final_path.is_dir():
+        shutil.copytree(cache_final_path, target_file_path)
 
     else:
-        shutil.copy(final_path.resolve(), target_file_path)
-
-    if logger:
-        logger.info(f'www file ready at {target_file_path}')
+        shutil.copy(cache_final_path, target_file_path)
 
     return target_file_path
-
-
-def decompress_extract(file_path: Path, target_path: Path, logger=None) -> Path:
-    if file_path.suffix in ['.tar', '.tar.gz', '.tar.xz', '.tgz']:
-        with tarfile.open(file_path, 'r:*') as tar:
-            tar.extractall(path=target_path)
-            if logger:
-                logger.info(f'extracted tar archive to {target_path}')
-
-    elif file_path.suffix == '.zip':
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall(target_path)
-            if logger:
-                logger.info(f'extracted zip archive to {target_path}')
-
-    elif file_path.suffix == '.xz' and lzma is not None:
-        with lzma.open(file_path) as f, open(target_path / file_path.stem, 'wb') as fout:
-            shutil.copyfileobj(f, fout)
-            if logger:
-                logger.info(f'decompressed xz file to {fout.name}')
-
-    elif file_path.suffix == '.zst' and zstd is not None:
-        dctx = zstd.ZstdDecompressor()
-        with open(file_path, 'rb') as f, open(target_path / file_path.stem, 'wb') as fout, dctx.stream_reader(f) as reader:
-            shutil.copyfileobj(reader, fout)
-            if logger:
-                logger.info(f'decompressed zstd file to {fout.name}')
-
-    else:
-        if logger:
-            logger.info(f'no decompression or extraction needed for {file_path}')
-
-        return target_path / file_path.stem
-
-    # cleanup original archive file
-    file_path.unlink()
-
-    return target_path / file_path.stem
 
 
 # docker helpers

@@ -29,7 +29,8 @@ class DockerService:
         self,
         stack: 'DockerStack',
         config: ServiceConfig,
-        root_pwd: Path
+        root_pwd: Path,
+        www_files: dict[str, Path] = {}
     ):
         self.stack: 'DockerStack' = stack
         self.name: str = config.name
@@ -38,12 +39,14 @@ class DockerService:
         self.root_pwd: Path = root_pwd
         self.logger: DockerStackLogger = stack.logger
         self.ip = '127.0.0.1' if not self.config.virtual_ip else self.config.virtual_ip
+        self.www_files = www_files
 
         self.template_whitelist: list[str | tuple[str, str]] = []
         self.templates: dict[str, Template] = {}
 
         self.more_params: dict[str, Any] = {}
         self.environment: dict[str, str] = config.env
+        self.www_files: dict[str, Path] = www_files
 
         self.container: Container | None = None
         self.container_name: str = f'{self.stack.name}-{config.name}'

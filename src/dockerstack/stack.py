@@ -34,6 +34,7 @@ from dockerstack.utils import (
 )
 
 
+from .cache import CacheDir
 from .errors import DockerStackException
 from .typing import ServiceConfig, StackConfig, WWWFileParams
 from .service import DockerService
@@ -76,11 +77,14 @@ class DockerStack:
         else:
             self.root_pwd = root_pwd
 
-        self.load_config(name=config_name, config=config)
-        self.name: str = self.config.name
-
         self.root_pwd.mkdir(parents=True, exist_ok=True)
         self.root_pwd = self.root_pwd.resolve()
+
+        self.cache_dir: CacheDir = CacheDir(self.root_pwd / '.cache')
+
+        self.load_config(name=config_name, config=config)
+
+        self.name: str = self.config.name
 
         self.services_wd = self.root_pwd / 'services'
         self.services_wd.mkdir(exist_ok=True)
@@ -154,6 +158,27 @@ class DockerStack:
         else:
             self.network = None
 
+        # fill service confs with remote bases as early as posible
+        for service_conf in self.config.stack:
+            if 'base' in service_conf:
+                file_name = service_conf['name'] + '.json'
+                cache_path = 'library/' + file_name
+
+                base_conf: dict
+                if self.cache_dir.file_exists(cache_path):
+                        base_conf = self.cache_dir.retrieve_json(cache_path)
+
+                else:
+                    # use remote json as service config base
+                    base_conf_resp = requests.get(service_conf['base'])
+                    base_conf_resp.raise_for_status()
+
+                    base_conf = base_conf_resp.json()
+
+                    self.cache_dir.store_json(base_conf, cache_path)
+
+                service_conf.update(**base_conf)
+
 
     def _get_raw_service_config(
         self,
@@ -168,34 +193,6 @@ class DockerStack:
 
         if not service_conf:
             raise DockerStackException(f'Raw config for service {service_name} not found!')
-
-        if 'base' in service_conf:
-            # define cache directory
-            cache_dir = (
-                Path(self.config.cache_dir) / 'library').expanduser().resolve()
-            cache_dir.mkdir(parents=True, exist_ok=True)
-
-            file_name = service_conf['name'] + '.json'
-
-            cache_file_path = (cache_dir / file_name).resolve()
-
-            base_conf: dict
-            if cache_file_path.exists():
-                # load from cache
-                with open(cache_file_path, 'r') as cache_file:
-                    base_conf = json.load(cache_file)
-
-            else:
-                # use remote json as service config base
-                base_conf_resp = requests.get(service_conf['base'])
-                base_conf_resp.raise_for_status()
-
-                base_conf = base_conf_resp.json()
-
-                with open(cache_file_path, 'w+') as cache_file:
-                    cache_file.write(json.dumps(base_conf, indent=4))
-
-            service_conf.update(**base_conf)
 
         return service_conf
 
@@ -218,6 +215,7 @@ class DockerStack:
         service_wd = self.services_wd / serv_path
         service_wd.mkdir(parents=True, exist_ok=True)
 
+        www_files = {}
         if 'www_files' in service_conf:
             # ensure www files are in dir
             for www_file in service_conf['www_files']:
@@ -228,12 +226,17 @@ class DockerStack:
                     target_path = Path(www_file.target_dir)
 
                 try:
-                    download_www_file(
+                    final_path = download_www_file(
                         www_file.url,
                         target_path,
+                        rename=www_file.rename,
                         logger=self.logger,
-                        cache_dir_path=Path(self.config.cache_dir) / 'files'
+                        cache_dir=self.cache_dir
                     )
+
+                    self.logger.stack_info(f'www file ready at {final_path}')
+
+                    www_files[final_path.name] = final_path
 
                 except BaseException as e:
                     raise DockerStackException(f'Failed to download {www_file.url}, {e}')
@@ -266,7 +269,7 @@ class DockerStack:
         self.service_configs[service_name] = service_conf
 
         return service_class(
-            self, service_conf, self.root_pwd)
+            self, service_conf, self.root_pwd, www_files=www_files)
 
 
     def get_service(self, alias: str) -> DockerService:

@@ -12,6 +12,26 @@ from dockerstack.service import DockerService
 def test_multi_fresh(stack):
     assert stack.status == 'healthy'
 
+    tester = stack.get_service('tester')
+
+    dirs = ['dockerstack-master', 'dockerstack-master-2']
+    files = ['mainnet-early-snapshot.bin', 'mainnet-deploy-snapshot.bin']
+    sizes = [124010144, 743530477]
+
+    for node in dirs + files:
+        assert node in tester.www_files
+
+        path = tester.www_files[node]
+
+        assert path.exists()
+
+        if node in dirs:
+            assert path.is_dir()
+
+        if node in files:
+            assert path.is_file()
+            assert path.stat().st_size == sizes[files.index(node)]
+
 
 @pytest.mark.stack_config(
     from_template='examples/multi_stack',

@@ -7,12 +7,15 @@ authors = ["Guillermo Rodriguez <guillermo@telos.net>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.10"
 pytest = "^8.0.0"
 pydantic = "^2.6.1"
 docker = "^7.0.0"
 networkx = "^3.2.1"
 simplejson = "^3.19.2"
+pyunpack = "^0.3"
+filelock = "^3.13.1"
+patool = "^2.2.0"
 zstandard = "^0.22.0"
 
 [tool.poetry.group.dev.dependencies]
