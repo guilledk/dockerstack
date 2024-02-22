@@ -148,7 +148,7 @@ def download_www_file(
         actual_name = url.split('/')[-1]
 
     if not isinstance(file_name, str):
-        file_name = actual_name
+        file_name = actual_name.split('.')[0]
 
     # cache file path should be actual name
     cache_file_path = f'files/{actual_name}'

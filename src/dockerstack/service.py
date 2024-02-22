@@ -10,17 +10,22 @@ from pathlib import Path
 from datetime import datetime
 
 import docker.errors as docker_errors
+from docker.models.images import Image
 
-from docker.types import Mount
+from docker.types import LogConfig, Mount
 from docker.models.containers import Container
 
 from .utils import (
-    docker_get_running_container, flatten, write_templated_file,
+    docker_build_image, docker_get_running_container, docker_pull_image, flatten, write_templated_file,
     docker_open_process, docker_wait_process, docker_stream_logs, docker_stop
 )
 from .errors import DockerServiceError
 from .typing import ServiceConfig, MkdirEntryDict, StartupKwargs
 from .logging import DockerStackLogger
+
+
+DEFAULT_DOCKER_LABEL = {'created-by': 'dockerstack'}
+DEFAULT_FILTER = {'label': DEFAULT_DOCKER_LABEL}
 
 
 class DockerService:
@@ -160,7 +165,11 @@ class DockerService:
 
         self.logger.stack_info(f'loaded {len(self.template_whitelist)} {self.name} templates')
 
-    def configure(self):
+    def configure(self) -> None:
+        '''generates fresh config files from templates in
+        service dir
+        '''
+
         self.config_subst['timestamp'] = str(datetime.now())
         for templ_path, template in self.templates.items():
             target = self.service_wd / templ_path
@@ -168,7 +177,71 @@ class DockerService:
             write_templated_file(target, template, self.config_subst)
             self.logger.stack_info('done')
 
-    def prepare(self):
+    def _build(self, **kwargs) -> Image:
+        '''internal, used to build service image, only use
+        if tag & config.docker_file is set
+        '''
+
+        try:
+            return docker_build_image(
+                self.stack.client,
+                tag=self.container_image,
+                path=str(self.service_wd),
+                dockerfile=self.config.docker_file,
+                log_fn=self.logger.stack_info,
+                **kwargs
+            )
+
+        except RuntimeError as e:
+            self.logger.stack_error(str(e))
+            raise DockerServiceError(
+                f'Couldn\'t build service {self}'
+            )
+
+    def _pull(self) -> Image:
+        '''internal, used to pull service image, only use
+        if config.docker_image is set
+        '''
+
+        try:
+            return docker_pull_image(
+                self.stack.client,
+                self.container_image,
+                log_fn=self.logger.stack_info
+            )
+
+        except RuntimeError as e:
+            self.logger.stack_error(str(e))
+            raise DockerServiceError(
+                f'Couldn\'t pull service {self}'
+            )
+
+    def get_image(self, **kwargs) -> Image:
+        '''ensure service image (be locally built or pulled from
+        remote is present on local image repo
+        '''
+
+        image = None
+        self.logger.stack_info(f'obtaining docker image for {self}')
+        if self.config.docker_file:
+            image = self._build(**kwargs)
+
+        elif self.config.docker_image:
+            image = self._pull()
+
+        else:
+            raise DockerServiceError(
+                f'Couldn\'t figure out how to get docker image for {self}')
+
+        self.logger.stack_info(f'got docker image for {self}, {image}')
+
+        return image
+
+
+    def prepare(self) -> None:
+        '''STAGE 1:
+        ensure all required services are running & set dynamic launch opts
+        '''
         service: DockerService | None = None
         try:
             for req_alias in self.config.requires:
@@ -179,7 +252,107 @@ class DockerService:
             raise DockerServiceError(
                 f'Required service {service} not running!')
 
+    def launch(self) -> None:
+        '''STAGE 2:
+        launch container image and wait sigusr2 trap is up
+        '''
+
+        # check if there already is a container running from that image
+        found = self.stack.client.containers.list(
+            filters={'name': self.container_name, 'status': 'running'})
+
+        if len(found) > 0:
+            raise DockerServiceError(
+                f'Container from image \'{self.container_name}\' is already running.')
+
+        # check if image is present
+        try:
+            cont_image = self.stack.client.images.get(self.container_image)
+
+        except docker_errors.ImageNotFound:
+            raise DockerServiceError(f'Image \'{self.container_image}\' not found.')
+
+        kwargs = {**self.more_params}
+        if self.stack.network:
+            # set to bridge, and connect to our custom virtual net after Launch
+            # this way we can set the ip addr
+            kwargs['network'] = str(self.stack.network)
+
+        else:
+            kwargs['network'] = 'host'
+
+        # always override entrypoint with our custom one
+        # which waits for USR2 before launching the original entrypoint
+        # or command.
+        cmd: list[str] = cont_image.attrs['Config']['Cmd']
+        entrypoint: list[str] = cont_image.attrs['Config']['Entrypoint']
+
+        wrap_exec: list[str] = []
+        if self.command:
+            wrap_exec = self.command
+
+        elif self.config.entrypoint and len(self.config.entrypoint) > 0:
+            wrap_exec = self.config.entrypoint
+
+        elif entrypoint and cmd:
+            wrap_exec = entrypoint + cmd
+
+        elif entrypoint:
+            wrap_exec = entrypoint
+
+        elif cmd:
+            wrap_exec = cmd
+
+        if len(wrap_exec) == 0:
+            raise DockerServiceError(
+                f'Could not find entrypoint or cmd for service {self.name}')
+
+        wrapped_exec = [
+            self.config.shell,
+            '-c',
+            ' '.join(['/shared/entrypoint_wrapper.sh', self.user, *wrap_exec])
+        ]
+
+        # run container
+        self.logger.stack_info(f'launching {self.container_name}...')
+        container = self.stack.client.containers.run(
+            self.container_image,
+            command=None,
+            name=self.container_name,
+            entrypoint=wrapped_exec,
+            mounts=list(self.mounts.values()),
+            environment=self.environment,
+            detach=True,
+            log_config=LogConfig(
+                type=LogConfig.types.JSON,
+                config={'max-size': '100m'}),
+            labels=DEFAULT_DOCKER_LABEL,
+            remove=True,
+            user='root',
+            **kwargs
+        )
+
+        # sanity check
+        if not isinstance(container, Container):
+            raise DockerServiceError(f'Couldn\'t get container instance after launch')
+
+        self.container = container
+
+        container.reload()
+        self.logger.stack_info(f'immediate status: {container.status}')
+
+        # wait for entrypoint to setup trap
+        for chunk in docker_stream_logs(container.id):
+            if 'Waiting for SIGUSR2 signal...' in chunk.decode():
+                break
+
+
     def pre_start(self):
+        '''STAGE 3:
+        with container up and ready and running as root, perform
+        permission setting procedure
+        '''
+
         # create service directories
         paths = [location for location in self.mkdirs]
         if len(paths) > 0:
@@ -242,7 +415,51 @@ class DockerService:
                     f'Couldn\'t initialize logging file {log_file_guest}')
 
     def start(self):
+        '''STAGE 4:
+        maybe run some code right after service is up, start wont be called until
+        startup phrase is found on logs if config.wait_startup == True
+        '''
         ...
+
+    def stop(self, **kwargs):
+        if not hasattr(self, 'container') or not self.container:
+            return
+
+        try:
+            docker_stop(
+                self.container,
+                stop_sequence=self.config.stop_sequence,
+                **kwargs
+            )
+            # self.container.remove()
+
+        except docker_errors.NotFound:
+            ...
+
+    def restart(self, recursive: bool = False) -> None:
+        self.stop()
+
+        # check that required services are healthy
+        for req_alias in self.config.requires:
+            req_service = self.stack.get_service(req_alias)
+
+            self.logger.stack_info(
+                f'checking required service {req_service} is running & healthy...')
+
+            if not req_service.running or not req_service.status == 'healthy':
+                if recursive:
+                    self.stack.restart_service(req_service)
+
+                else:
+                    raise DockerServiceError(
+                        f'Tried to restart {self} but required service {req_service}'
+                        ' is unhealthy and recursive == False')
+
+        self.load_templates()
+        self.configure()
+        self.get_image()
+
+        self.stack.launch_service(self)
 
     def _stream_logs_from_dir(
         self,
@@ -264,17 +481,28 @@ class DockerService:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
 
+        stdout_lines: list[str] = []
         for line in iter(process.stdout.readline, b''):
             msg = line.decode()
             yield msg
+            stdout_lines.append(msg)
 
         process.stdout.close()
         process.wait()
 
         if process.returncode != 0:
-            raise ValueError(
-                f'tail returned {process.returncode}\n'
-                f'{process.stderr.read().decode("utf-8")}')
+
+            self.logger.stack_info(f'displaying last 100 lines of {self.name} stdout:')
+            for line in stdout_lines[-100:]:
+                self.logger.stack_info(line.rstrip())
+
+            if process.returncode == 124:
+                raise DockerServiceError(f'Timed out reading log file')
+
+            else:
+                raise DockerServiceError(
+                    f'tail returned {process.returncode}\n'
+                    f'{process.stderr.read().decode("utf-8")}')
 
     def stream_logs(self, **kwargs) -> Generator[str, None, None]:
         if not isinstance(self.container, Container):
@@ -307,21 +535,6 @@ class DockerService:
     def run_in_shell(self, cmd, *args, **kwargs) -> tuple[int, str]:
         cmd = [self.shell, '-c', ' '.join(cmd)]
         return self.run_process(cmd, *args, **kwargs)
-
-    def stop(self, **kwargs):
-        if not hasattr(self, 'container') or not self.container:
-            return
-
-        try:
-            docker_stop(
-                self.container,
-                stop_sequence=self.config.stop_sequence,
-                **kwargs
-            )
-            # self.container.remove()
-
-        except docker_errors.NotFound:
-            ...
 
     @property
     def running(self) -> bool:

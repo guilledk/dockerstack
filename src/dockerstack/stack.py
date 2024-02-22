@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import copy
 import os
 import sys
 import json
@@ -21,15 +22,14 @@ import requests
 import networkx as nx
 
 from docker import DockerClient
-from docker.types import Mount, LogConfig, IPAMConfig, IPAMPool
+from docker.types import Mount, IPAMConfig, IPAMPool
 from docker.models.images import Image
 from docker.models.containers import Container
 from docker.models.networks import Network
 
 from dockerstack.utils import (
-    docker_build_image, docker_pull_image,
+     docker_pull_image,
     docker_get_running_container,
-    docker_stream_logs,
     docker_stop, download_www_file
 )
 
@@ -40,9 +40,6 @@ from .typing import ServiceConfig, StackConfig, WWWFileParams
 from .service import DockerService
 from .logging import DockerStackLogger, get_stack_logger
 
-
-DEFAULT_DOCKER_LABEL = {'created-by': 'dockerstack'}
-DEFAULT_FILTER = {'label': DEFAULT_DOCKER_LABEL}
 
 LOGROTATOR_IMAGE = 'blacklabelops/logrotate:latest'
 
@@ -55,8 +52,10 @@ class DockerStack:
         log_level: str = 'INFO',
         root_pwd: Path | None = None,
         config: dict | None = None,
-        config_name: str  = 'stack.json'
+        config_name: str  = 'stack.json',
+        cache_dir: str | CacheDir | None = None
     ):
+        self.name: str
         self.pid = os.getpid()
         self.client: DockerClient = docker.from_env()
         self.config: StackConfig
@@ -65,6 +64,9 @@ class DockerStack:
         self.services = SimpleNamespace()
         self.service_configs: dict[str, ServiceConfig] = {}
         self.ordered_services: list[DockerService] = []
+
+        # map service alias -> service name
+        self._alias_map: dict[str, str] = {}
 
         self.logger: DockerStackLogger
         if logger is None:
@@ -80,11 +82,18 @@ class DockerStack:
         self.root_pwd.mkdir(parents=True, exist_ok=True)
         self.root_pwd = self.root_pwd.resolve()
 
-        self.cache_dir: CacheDir = CacheDir(self.root_pwd / '.cache')
+        self.cache_dir: CacheDir
+        if isinstance(cache_dir, str):
+            self.cache_dir = CacheDir(cache_dir)
 
-        self.load_config(name=config_name, config=config)
+        elif isinstance(cache_dir, CacheDir):
+            self.cache_dir = cache_dir
 
-        self.name: str = self.config.name
+        elif cache_dir is None:
+            self.cache_dir: CacheDir = CacheDir(self.root_pwd / '.cache')
+
+        else:
+            raise DockerStackException(f'Invalid cache dir config {cache_dir}')
 
         self.services_wd = self.root_pwd / 'services'
         self.services_wd.mkdir(exist_ok=True)
@@ -96,6 +105,8 @@ class DockerStack:
         self.shared_wd.mkdir(exist_ok=True)
 
         self.source_wd = Path(__file__).parent.resolve()
+
+        self.load_config(name=config_name, config=config)
 
         shared_entrypoint = self.shared_wd / 'entrypoint_wrapper.sh'
         if not shared_entrypoint.is_file():
@@ -109,26 +120,33 @@ class DockerStack:
 
         self.logrotator: Container | None = None
 
+    def _generate_alias_maps(self) -> None:
+        self._alias_map = {}
+        for service in self.config.stack:
+            self._alias_map[service['name']] = service['name']
+            aliases = service['aliases'] if 'aliases' in service else []
+            self._alias_map.update(
+                {a: service['name'] for a in aliases})
 
     def service_alias_to_name(self, alias: str) -> str:
-        name_match: str | None = None
-        for service in self.config.stack:
-            service_name = service['name']
-            if (alias == service_name or
-                ('aliases' in service and alias in service['aliases'])):
-                name_match = service_name
-                break
-
-        if not name_match:
+        if alias not in self._alias_map:
             raise DockerStackException(f'Unknown service alias {alias}')
 
-        return name_match
+        return self._alias_map[alias]
 
-    def write_config(self, name: str = 'stack.json'):
-        config_file = (self.root_pwd / name).resolve()
+    def write_config(
+        self,
+        name: str = 'stack.json',
+        target: Path | None = None
+    ):
+        if not target:
+            target = self.root_pwd / name
+
+        config_file = target.resolve()
 
         with open(config_file, 'w+') as config_file:
-            config_file.write(json.dumps(self.config.model_dump(), indent=4))
+            json.dump(
+                self.config.model_dump(), config_file, indent=4)
 
     def load_config(
         self,
@@ -139,14 +157,50 @@ class DockerStack:
         if not target:
             target = self.root_pwd / name
 
-        if not config:
+        if config is None:
+            if not isinstance(target, Path):
+                raise DockerStackException(f'Couldn\'t figure out config source')
+
             with open(target, 'r') as config_file:
                 config = json.loads(config_file.read())
 
-        else:
+        elif isinstance(config, dict):
             config = deepcopy(config)
 
+        # sanity checks
+        if not isinstance(config, dict):
+            raise DockerStackException('Expected config to be a dict')
+
+        if 'stack' not in config:
+            raise DockerStackException('stack field not present on config')
+
         self.config = StackConfig(**config)
+        self.name = self.config.name
+
+        # fill service confs with remote bases as early as posible
+        service_configs: list[dict[str, Any]] = deepcopy(config['stack'])
+        for service in service_configs:
+            if 'base' in service:
+                file_name = service['name'] + '.json'
+                cache_path = 'library/' + file_name
+
+                base_conf: dict
+                if self.cache_dir.file_exists(cache_path):
+                        base_conf = self.cache_dir.retrieve_json(cache_path)
+
+                else:
+                    # use remote json as service config base
+                    base_conf_resp = requests.get(service['base'])
+                    base_conf_resp.raise_for_status()
+
+                    base_conf = base_conf_resp.json()
+
+                    self.cache_dir.store_json(base_conf, cache_path)
+
+                service.update(**base_conf)
+
+        # update stack config with filled service confs
+        self.config.stack = service_configs
 
         # darwin arch doesn't support host networking mode...
         if self.config.network or sys.platform == 'darwin':
@@ -158,27 +212,9 @@ class DockerStack:
         else:
             self.network = None
 
-        # fill service confs with remote bases as early as posible
-        for service_conf in self.config.stack:
-            if 'base' in service_conf:
-                file_name = service_conf['name'] + '.json'
-                cache_path = 'library/' + file_name
+        self._generate_alias_maps()
 
-                base_conf: dict
-                if self.cache_dir.file_exists(cache_path):
-                        base_conf = self.cache_dir.retrieve_json(cache_path)
-
-                else:
-                    # use remote json as service config base
-                    base_conf_resp = requests.get(service_conf['base'])
-                    base_conf_resp.raise_for_status()
-
-                    base_conf = base_conf_resp.json()
-
-                    self.cache_dir.store_json(base_conf, cache_path)
-
-                service_conf.update(**base_conf)
-
+        self.initialize()
 
     def _get_raw_service_config(
         self,
@@ -276,146 +312,15 @@ class DockerStack:
         service_name = self.service_alias_to_name(alias)
         return getattr(self.services, service_name)
 
-    def pull_service(self, alias: str) -> Image:
-        service: DockerService = self.get_service(alias)
-
-        try:
-            return docker_pull_image(
-                self.client,
-                service.container_image,
-                log_fn=self.logger.stack_info
-            )
-
-        except RuntimeError as e:
-            self.logger.stack_error(str(e))
-            raise DockerStackException(
-                f"Couldn't build service {alias}."
-            )
-
-    def build_service(self, alias: str, **kwargs) -> Image:
-        service: DockerService = self.get_service(alias)
-
-        try:
-            return docker_build_image(
-                self.client,
-                tag=service.container_image,
-                path=str(service.service_wd),
-                dockerfile=service.config.docker_file,
-                log_fn=self.logger.stack_info,
-                **kwargs
-            )
-
-        except RuntimeError as e:
-            self.logger.stack_error(str(e))
-            raise DockerStackException(
-                f"Couldn't build service {alias}."
-            )
-
-    def get_service_image(self, alias: str, **kwargs) -> Image:
-        service = self.get_service(alias)
-
-        if service.config.docker_file:
-            return self.build_service(alias, **kwargs)
-
-        if service.config.docker_image:
-            return self.pull_service(alias)
-
-        raise DockerStackException(
-            f'Couldn\'t figure out how to get docker image for {service.name}')
-
     def launch_service_container(
         self,
         service: DockerService
     ):
-        # check if there already is a container running from that image
-        found = self.client.containers.list(
-            filters={'name': service.container_name, 'status': 'running'})
-
-        if len(found) > 0:
-            raise DockerStackException(
-                f'Container from image \'{service.container_name}\' is already running.')
-
-        # check if image is present
-        try:
-            cont_image = self.client.images.get(service.container_image)
-
-        except docker_errors.ImageNotFound:
-            raise DockerStackException(f'Image \'{service.container_image}\' not found.')
-
-        kwargs = deepcopy(service.more_params)
-        if self.network:
-            # set to bridge, and connect to our custom virtual net after Launch
-            # this way we can set the ip addr
-            kwargs['network'] = 'bridge'
-
-        else:
-            kwargs['network'] = 'host'
-
-        # always override entrypoint with our custom one
-        # which waits for USR2 before launching the original entrypoint
-        # or command.
-        cmd: list[str] = cont_image.attrs['Config']['Cmd']
-        entrypoint: list[str] = cont_image.attrs['Config']['Entrypoint']
-
-        wrap_exec: list[str] = []
-        if service.command:
-            wrap_exec = service.command
-
-        elif service.config.entrypoint and len(service.config.entrypoint) > 0:
-            wrap_exec = service.config.entrypoint
-
-        elif entrypoint and cmd:
-            wrap_exec = entrypoint + cmd
-
-        elif entrypoint:
-            wrap_exec = entrypoint
-
-        elif cmd:
-            wrap_exec = cmd
-
-        if len(wrap_exec) == 0:
-            raise DockerStackException(
-                f'Could not find entrypoint or cmd for service {service.name}')
-
-        wrapped_exec = [
-            service.config.shell,
-            '-c',
-            ' '.join(['/shared/entrypoint_wrapper.sh', service.user, *wrap_exec])
-        ]
-
-        # run container
-        self.logger.stack_info(f'launching {service.container_name}...')
-        container = self.client.containers.run(
-            service.container_image,
-            command=None,
-            name=service.container_name,
-            entrypoint=wrapped_exec,
-            mounts=list(service.mounts.values()),
-            environment=service.environment,
-            detach=True,
-            log_config=LogConfig(
-                type=LogConfig.types.JSON,
-                config={'max-size': '100m'}),
-            labels=DEFAULT_DOCKER_LABEL,
-            remove=True,
-            user='root',
-            **kwargs
-        )
-        assert isinstance(container, Container)
-        service.container = container
-
-        container.reload()
-        self.logger.stack_info(f'immediate status: {container.status}')
-
-        # wait for entrypoint to setup trap
-        for chunk in docker_stream_logs(container.id):
-            if 'Waiting for SIGUSR2 signal...' in chunk.decode():
-                break
-
+        service.launch()
         service.pre_start()
 
         # send SIGUSR2 to continue normal container startup
-        container.kill(signal=signal.SIGUSR2)
+        service.container.kill(signal=signal.SIGUSR2)
 
     def stream_logs(self, source: str, **kwargs):
         for log in getattr(self.services, source).stream_logs(**kwargs):
@@ -578,14 +483,14 @@ class DockerStack:
         if self.logrotator:
             docker_stop(self.logrotator)
 
-    def start(self, exist_ok: bool = False, repair: bool = True):
+    def start(self, exist_ok: bool = False):
         self.logger.stack_info(f'{self.config.name} starting...')
 
         try:
             for service in self.ordered_services:
                 service.load_templates()
                 service.configure()
-                self.get_service_image(service.name)
+                service.get_image()
 
             if self.config.logs.enabled:
                 self._maybe_setup_logrotate()
@@ -600,42 +505,14 @@ class DockerStack:
 
                 status = service.status
                 if status == 'unhealthy':
-                    if not repair:
-                        raise DockerStackException(
-                            f'Service {service} has status {status} and repair == False')
-
-                    # attempt service restart
-                    self.restart_service(service)
-
-                    # if still unhealthy raise
-                    if service.status == 'unhealthy':
-                        raise DockerStackException(
-                            f'Tried to restart unhealthy service {service}')
+                    raise DockerStackException(
+                        f'Service {service} has status {status} and repair == False')
 
             self.logger.stack_info(f'{self.config.name} finished start')
 
         except BaseException:
             self.stop()
             raise
-
-    def restart_service(self, service: DockerService):
-        self.logger.stack_info(f'restarting {service}')
-        service.stop()
-        service.load_templates()
-        service.configure()
-        self.get_service_image(service.name)
-
-        # check that required services are healthy
-        for req_alias in service.config.requires:
-            req_service = self.get_service(req_alias)
-
-            self.logger.stack_info(f'checking required service {req_service} is running & healthy...')
-
-            if not req_service.running or not req_service.status == 'healthy':
-                self.restart_service(req_service)
-
-        self.launch_service(service)
-        self.logger.stack_info(f'restarted {service}')
 
     def stop(self):
         self.logger.stack_info(f'{self.config.name} is stopping...')
@@ -652,14 +529,11 @@ class DockerStack:
     def open(
         self,
         exist_ok: bool = False,
-        teardown: bool = True,
-        repair: bool = True
+        teardown: bool = True
     ):
         self.logger.stack_info('')
-        self.initialize()
         self.start(
-            exist_ok=exist_ok,
-            repair=repair
+            exist_ok=exist_ok
         )
         yield self
         if teardown:

@@ -48,6 +48,18 @@ logging.addLevelName(STACK_ERROR_NUM, 'STACK_ERROR')
 
 class DockerStackLogger(logging.Logger):
 
+    def info(self, message, *args, **kwargs):
+        if self.isEnabledFor(STACK_INFO_NUM):
+            self._log(STACK_INFO_NUM, message, args, **kwargs)
+
+    def warning(self, message, *args, **kwargs):
+        if self.isEnabledFor(STACK_WARNING_NUM):
+            self._log(STACK_WARNING_NUM, message, args, **kwargs)
+
+    def error(self, message, *args, **kwargs):
+        if self.isEnabledFor(STACK_ERROR_NUM):
+            self._log(STACK_ERROR_NUM, message, args, **kwargs)
+
     def stack_info(self, message, *args, **kwargs):
         if self.isEnabledFor(STACK_INFO_NUM):
             self._log(STACK_INFO_NUM, message, args, **kwargs)

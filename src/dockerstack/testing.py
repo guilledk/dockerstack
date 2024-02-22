@@ -132,11 +132,12 @@ def stack(tmp_path_factory, request) -> Generator[DockerStack, None, None]:
 
     _stack = DockerStack(
         root_pwd=target_dir.resolve(strict=True),
-        config_name=config.config_name)
+        config_name=config.config_name,
+        cache_dir='tests/.cache'
+    )
 
     with _stack.open(
         exist_ok=config.exist_ok,
-        repair=config.repair,
         teardown=config.teardown
     ) as _stack:
         yield _stack

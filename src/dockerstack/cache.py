@@ -12,6 +12,7 @@ from zstandard import ZstdDecompressor
 
 
 class CacheDir:
+
     def __init__(self, root_dir: Path | str = '~/.cache/dockerstack'):
         self.root_dir = Path(root_dir).expanduser().resolve()
         self.root_dir.mkdir(parents=True, exist_ok=True)

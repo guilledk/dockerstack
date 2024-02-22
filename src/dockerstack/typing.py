@@ -57,7 +57,7 @@ class ServiceConfig(BaseModel):
     startup_logs_kwargs: StartupKwargs = StartupKwargs()
     wait_startup: bool = True
     show_startup: bool = False
-    show_build: bool = True
+    show_build: bool = False
     requires: list[str] = []
     stop_sequence: list[str] = ['SIGINT', 'SIGTERM', 'SIGKILL']
 
