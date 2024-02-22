@@ -188,7 +188,7 @@ class DockerService:
                 tag=self.container_image,
                 path=str(self.service_wd),
                 dockerfile=self.config.docker_file,
-                log_fn=self.logger.stack_info,
+                log_fn=self.logger.stack_info if self.config.show_build else None,
                 **kwargs
             )
 
@@ -207,7 +207,7 @@ class DockerService:
             return docker_pull_image(
                 self.stack.client,
                 self.container_image,
-                log_fn=self.logger.stack_info
+                log_fn=self.logger.stack_info if self.config.show_build else None,
             )
 
         except RuntimeError as e:
