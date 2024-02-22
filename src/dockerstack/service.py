@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 from string import Template
 from typing import Any, Callable, Iterator, Generator
 from pathlib import Path
@@ -581,13 +579,29 @@ class DockerService:
 
     def register_phrase_handler(
         self,
-        fn: PhraseHandler,
+        fn: PhraseHandler | None,
         phrase: str,
         description: str
-    ):
+    ) -> None:
         if phrase in self.phrase_handlers:
             raise DockerServiceError(
                 f'Phrase handler for \"{phrase}\" already exists!')
 
         self.phrase_handlers[phrase] = PhraseHandlerEntry(
             handler=fn, description=description)
+
+
+    def phrase_handler(
+        self,
+        phrase: str,
+        description: str
+    ):
+        '''
+        A decorator factory that takes a phrase and returns a decorator.
+        The decorator adds the given function to the handlers dictionary with the phrase as key.
+        '''
+        def decorator(fn):
+            self.register_phrase_handler(fn, phrase, description)
+            return fn
+
+        return decorator
