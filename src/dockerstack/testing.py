@@ -13,6 +13,7 @@ import docker
 from docker.types import Mount
 from pydantic import BaseModel, model_validator
 from dockerstack.stack import DockerStack
+from dockerstack.utils import docker_rm
 
 
 class StackFixtureError(BaseException):
@@ -81,27 +82,7 @@ def fresh_target_dir(request) -> None:
     target_path = Path(config.target_dir).resolve()
 
     if target_path.exists():
-        # * flashes TCD testing bureau badge *: im commandeering this directory
-        client = docker.from_env()
-        user: int = os.getuid()
-        group: int = os.getgid()
-
-        cmd = ['chown', '-R', f'{user}:{group}', '/target']
-
-        client.containers.run(
-            'bash', ['bash', '-c', ' '.join(cmd)],
-            mounts=[Mount('/target', str(target_path), 'bind')],
-            remove=True
-        )
-
-        # make sure chown worked
-        stat: os.stat_result = target_path.stat()
-        assert stat.st_uid == user
-        assert stat.st_gid == group
-
-        # delete
-        shutil.rmtree(target_path)
-        assert not target_path.exists()
+        docker_rm(target_path)
 
     shutil.copytree(template_path, target_path)
 

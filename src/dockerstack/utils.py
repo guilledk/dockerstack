@@ -601,3 +601,62 @@ def docker_stop(
     for sig in stop_sequence:
         if _try_stop_with_signal(sig):
             break
+
+
+import os
+import docker
+
+from docker.types import Mount
+
+
+def docker_chown(
+    target_path: Path,
+    user: int | None = None,
+    group: int | None = None
+) -> None:
+    # * flashes TCD testing bureau badge *: im commandeering this directory
+    client = docker.from_env()
+
+    if not isinstance(user, int):
+        user = os.getuid()
+
+    if not isinstance(group, int):
+        group = os.getgid()
+
+    cmd = ['chown', '-R', f'{user}:{group}', '/target']
+
+    client.containers.run(
+        'bash', ['bash', '-c', ' '.join(cmd)],
+        mounts=[Mount('/target', str(target_path), 'bind')],
+        remove=True
+    )
+
+    # make sure chown worked
+    stat = target_path.stat()
+    if stat.st_uid != user or stat.st_gid != group:
+        raise PermissionError(f'Docker chown failed to set permissions on target!')
+
+
+def docker_rm(target_path: Path) -> None:
+    if not target_path.exists():
+        raise FileNotFoundError(f'target_path does not exist!')
+
+    try:
+        # attempt straight up delete, in case we have
+        # enough permissions, no need to run container
+        if target_path.is_dir():
+            shutil.rmtree(target_path)
+
+        else:
+            target_path.unlink()
+
+        return
+
+    except PermissionError as pe:
+        ...
+
+    # use docker to chown the target
+    docker_chown(target_path)
+
+    # delete
+    shutil.rmtree(target_path)
