@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+
+import json
+
 from string import Template
 from typing import Any, Callable, Iterator, Generator
 from pathlib import Path
@@ -11,6 +14,7 @@ from docker.models.images import Image
 
 from docker.types import LogConfig, Mount
 from docker.models.containers import Container
+from pydantic import BaseModel
 
 from .utils import (
     docker_build_image, docker_get_running_container, docker_pull_image, flatten, stream_file, write_templated_file,
@@ -28,6 +32,10 @@ DEFAULT_FILTER = {'label': DEFAULT_DOCKER_LABEL}
 # if frase returns True count as ok startup
 # else assume error and throw
 PhraseHandler = Callable[[], None]
+
+class PhraseHandlerEntry(BaseModel):
+    handler: PhraseHandler | None
+    description: str
 
 
 class DockerService:
@@ -71,8 +79,6 @@ class DockerService:
                 f'its image ({self.container.image}) is not {self.container_image}')
 
         self.command: list[str] | None = None
-
-        self.startup_logs_kwargs: StartupKwargs = config.startup_logs_kwargs
 
         self.shell = config.shell
         self.user = config.user
@@ -147,17 +153,31 @@ class DockerService:
 
         self.sym_links: list[tuple[str, str]] = config.sym_links
 
-        self.phrase_handlers: dict[str, PhraseHandler | None] = {}
+        self.phrase_handlers: dict[str, PhraseHandlerEntry] = {}
 
-        if isinstance(self.startup_phrase, str):
-            self.phrase_handlers[self.startup_phrase] = None
+        default_ok_desc = 'phrase indicates correct startup'
+        self.startup_phrases: list[tuple[str, str]] = []
+        if isinstance(config.startup_phrase, str):
+            self.startup_phrases = [
+                (config.startup_phrase, default_ok_desc)
+            ]
+
+        elif isinstance(config.startup_phrase, list):
+            self.startup_phrases = [
+                (phrase, default_ok_desc)
+                if isinstance(phrase, str)
+                else phrase
+                for phrase in config.startup_phrase
+            ]
+
+        for phrase, description in self.startup_phrases:
+            self.phrase_handlers[phrase] = PhraseHandlerEntry(
+                handler=None, description=description)
+
+        self.startup_logs_kwargs: StartupKwargs = config.startup_logs_kwargs
 
     def __str__(self) -> str:
         return self.name
-
-    @property
-    def startup_phrase(self) -> str | None:
-        return self.config.startup_phrase
 
     def load_templates(self):
         for template in self.template_whitelist:
@@ -422,10 +442,10 @@ class DockerService:
                     f'Couldn\'t initialize logging file {log_file_guest}')
 
     def _maybe_match_msg(self, msg: str) -> str:
-        for phrase, handler in self.phrase_handlers.items():
+        for phrase, entry in self.phrase_handlers.items():
             if phrase in msg:
-                if handler is not None:
-                    handler()
+                if entry.handler is not None:
+                    entry.handler()
 
                 return phrase
 
@@ -433,13 +453,20 @@ class DockerService:
 
     def wait_startup(self):
         '''STAGE 4:
-        stream logs and optionally wait for startup or a configured error phrase handler
+        stream logs and optionally wait for startup or a configured phrase handler
         '''
         if len(self.phrase_handlers) > 0 and self.config.wait_startup:
 
+            max_wait_time = self.startup_logs_kwargs.timeout
+
             self.logger.stack_info(
-                f'waiting until phrase \"{self.startup_phrase}\" is present '
-                f'in {self.name} logs (max wait time: {self.startup_logs_kwargs.timeout} sec)')
+                f'waiting at most {max_wait_time}s to start until '
+                f'one of the following phrases is present on {self}\'s logs:'
+            )
+
+            for phrase, entry in self.phrase_handlers.items():
+                self.logger.stack_info(
+                    f'\"{phrase}\": {entry.description}')
 
             found_phrase: bool = False
             for msg in self.stream_logs(**self.startup_logs_kwargs.model_dump()):
@@ -448,7 +475,7 @@ class DockerService:
 
                 maybe_phrase = self._maybe_match_msg(msg)
                 if len(maybe_phrase) > 0:
-                    self.logger.info(f'phrase {maybe_phrase} found in logs')
+                    self.logger.stack_info(f'phrase {maybe_phrase} found in logs')
                     found_phrase = True
                     break
 
@@ -551,3 +578,16 @@ class DockerService:
     @property
     def status(self) -> str:
         return 'healthy'
+
+    def register_phrase_handler(
+        self,
+        fn: PhraseHandler,
+        phrase: str,
+        description: str
+    ):
+        if phrase in self.phrase_handlers:
+            raise DockerServiceError(
+                f'Phrase handler for \"{phrase}\" already exists!')
+
+        self.phrase_handlers[phrase] = PhraseHandlerEntry(
+            handler=fn, description=description)

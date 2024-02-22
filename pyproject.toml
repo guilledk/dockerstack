@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dockerstack"
-version = "1.0.0-rc15"
+version = "1.0.0-rc16"
 packages = [{include = 'dockerstack', from='src'}]
 description = "Docker/python based infra as code framework"
 authors = ["Guillermo Rodriguez <guillermo@telos.net>"]

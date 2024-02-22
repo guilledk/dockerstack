@@ -54,7 +54,7 @@ class ServiceConfig(BaseModel):
     www_files: list[WWWFileParams] = []
     virtual_ip: str | None = None
 
-    startup_phrase: str | None = None
+    startup_phrase: str | list[str | tuple[str, str]] | None = None
     startup_logs_kwargs: StartupKwargs = StartupKwargs()
 
     wait_startup: bool = True

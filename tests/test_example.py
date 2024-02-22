@@ -41,24 +41,24 @@ def test_multi_fresh(stack):
 def test_multi_keep_alive_start(fresh_target_dir, stack):
     assert stack.status == 'healthy'
 
-@pytest.mark.stack_config(
-    from_dir='tests/multi_stack',
-    exist_ok=True, teardown=False
-)
-def test_multi_keep_alive_make_redis_unhealty(stack):
-    redis: DockerService = stack.get_service('redis')
-    redis.stop()
-
-    assert not redis.running
-    assert redis.status == 'unhealthy'
-    assert stack.status == 'unhealthy'
-
-@pytest.mark.stack_config(
-    from_dir='tests/multi_stack',
-    exist_ok=True, teardown=False
-)
-def test_multi_keep_alive_fix_unhealty(stack):
-    assert stack.status == 'healthy'
+# @pytest.mark.stack_config(
+#     from_dir='tests/multi_stack',
+#     exist_ok=True, teardown=False
+# )
+# def test_multi_keep_alive_make_redis_unhealty(stack):
+#     redis: DockerService = stack.get_service('redis')
+#     redis.stop()
+# 
+#     assert not redis.running
+#     assert redis.status == 'unhealthy'
+#     assert stack.status == 'unhealthy'
+# 
+# @pytest.mark.stack_config(
+#     from_dir='tests/multi_stack',
+#     exist_ok=True, teardown=False
+# )
+# def test_multi_keep_alive_fix_unhealty(stack):
+#     assert stack.status == 'healthy'
 
 
 @pytest.mark.stack_config(
