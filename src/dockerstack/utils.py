@@ -9,6 +9,7 @@ import struct
 import socket
 import logging
 import tarfile
+import subprocess
 
 from string import Template
 from typing import Callable, Iterator, Generator
@@ -246,6 +247,52 @@ def download_www_file(
         shutil.copy(cache_final_path, target_file_path)
 
     return target_file_path
+
+
+def stream_file(
+    file_path: Path,
+    from_latest: bool = True,
+    lines: int = 100,  # amount of lines to display before latest if from_latest == True
+    timeout: int = 10,  # timeout if no line is received, seconds, 0 to disable
+) -> Generator[str, None, None]:
+    file_path = file_path.resolve()
+
+    if not file_path.is_file():
+        raise FileNotFoundError(f'File at {file_path} not found!')
+
+    line_str = str(lines) if from_latest else '+1'
+
+    timeout_cmd = []
+    if timeout > 0:
+        timeout_cmd = ['timeout', str(timeout)]
+
+    cmd: list[str] = timeout_cmd + ['tail', '-n', line_str, '-f', str(file_path)]
+
+    process = subprocess.Popen(
+        ' '.join(cmd),
+        shell=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+    )
+
+    stdout_lines: list[str] = []
+    for line in iter(process.stdout.readline, b''):
+        msg = line.decode()
+        yield msg
+        stdout_lines.append(msg)
+
+    process.stdout.close()
+    process.wait()
+
+    if process.returncode != 0:
+        debug_show_amount = 20
+        last_lines = '\n'.join(stdout_lines[-debug_show_amount:])
+        if process.returncode == 124:
+            raise ChildProcessError(
+                f'Timed out reading {file_path}, last {debug_show_amount} lines of output: {last_lines}')
+
+        else:
+            raise ChildProcessError(
+                f'Tail returned {process.returncode}, last {debug_show_amount} lines of output: \n{last_lines}')
 
 
 # docker helpers

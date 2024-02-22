@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-
-import subprocess
-
 from string import Template
-from typing import Any, Iterator, Generator
+from typing import Any, Callable, Iterator, Generator
 from pathlib import Path
 from datetime import datetime
 
@@ -16,7 +13,7 @@ from docker.types import LogConfig, Mount
 from docker.models.containers import Container
 
 from .utils import (
-    docker_build_image, docker_get_running_container, docker_pull_image, flatten, write_templated_file,
+    docker_build_image, docker_get_running_container, docker_pull_image, flatten, stream_file, write_templated_file,
     docker_open_process, docker_wait_process, docker_stream_logs, docker_stop
 )
 from .errors import DockerServiceError
@@ -26,6 +23,11 @@ from .logging import DockerStackLogger
 
 DEFAULT_DOCKER_LABEL = {'created-by': 'dockerstack'}
 DEFAULT_FILTER = {'label': DEFAULT_DOCKER_LABEL}
+
+
+# if frase returns True count as ok startup
+# else assume error and throw
+PhraseHandler = Callable[[], None]
 
 
 class DockerService:
@@ -144,6 +146,11 @@ class DockerService:
                 )
 
         self.sym_links: list[tuple[str, str]] = config.sym_links
+
+        self.phrase_handlers: dict[str, PhraseHandler | None] = {}
+
+        if isinstance(self.startup_phrase, str):
+            self.phrase_handlers[self.startup_phrase] = None
 
     def __str__(self) -> str:
         return self.name
@@ -414,8 +421,43 @@ class DockerService:
                 raise DockerServiceError(
                     f'Couldn\'t initialize logging file {log_file_guest}')
 
-    def start(self):
+    def _maybe_match_msg(self, msg: str) -> str:
+        for phrase, handler in self.phrase_handlers.items():
+            if phrase in msg:
+                if handler is not None:
+                    handler()
+
+                return phrase
+
+        return ''
+
+    def wait_startup(self):
         '''STAGE 4:
+        stream logs and optionally wait for startup or a configured error phrase handler
+        '''
+        if len(self.phrase_handlers) > 0 and self.config.wait_startup:
+
+            self.logger.stack_info(
+                f'waiting until phrase \"{self.startup_phrase}\" is present '
+                f'in {self.name} logs (max wait time: {self.startup_logs_kwargs.timeout} sec)')
+
+            found_phrase: bool = False
+            for msg in self.stream_logs(**self.startup_logs_kwargs.model_dump()):
+                if self.config.show_startup:
+                    self.logger.stack_info(msg.rstrip())
+
+                maybe_phrase = self._maybe_match_msg(msg)
+                if len(maybe_phrase) > 0:
+                    self.logger.info(f'phrase {maybe_phrase} found in logs')
+                    found_phrase = True
+                    break
+
+            if not found_phrase:
+                raise DockerServiceError(
+                    f'timed out waiting for startup phrase matching')
+
+    def start(self):
+        '''STAGE 5:
         maybe run some code right after service is up, start wont be called until
         startup phrase is found on logs if config.wait_startup == True
         '''
@@ -461,56 +503,14 @@ class DockerService:
 
         self.stack.launch_service(self)
 
-    def _stream_logs_from_dir(
-        self,
-        timeout: float = 10,
-        lines: int = 0,
-        from_latest: bool = True
-    ) -> Generator[str, None, None]:
-        log_path = self.stack.logs_wd / self.log_file
-        log_path = log_path.resolve()
-
-        if not log_path.is_file():
-            raise DockerServiceError(f'Log file at {log_path} not found!')
-
-        line_str = str(lines) if from_latest else '+1'
-
-        process = subprocess.Popen(
-            ['bash', '-c',
-                f'timeout {timeout} tail -n {line_str} -f {log_path}'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-
-        stdout_lines: list[str] = []
-        for line in iter(process.stdout.readline, b''):
-            msg = line.decode()
-            yield msg
-            stdout_lines.append(msg)
-
-        process.stdout.close()
-        process.wait()
-
-        if process.returncode != 0:
-
-            self.logger.stack_info(f'displaying last 100 lines of {self.name} stdout:')
-            for line in stdout_lines[-100:]:
-                self.logger.stack_info(line.rstrip())
-
-            if process.returncode == 124:
-                raise DockerServiceError(f'Timed out reading log file')
-
-            else:
-                raise DockerServiceError(
-                    f'tail returned {process.returncode}\n'
-                    f'{process.stderr.read().decode("utf-8")}')
-
     def stream_logs(self, **kwargs) -> Generator[str, None, None]:
         if not isinstance(self.container, Container):
             raise DockerServiceError(
                 f'Tried to stream logs but container is {self.container}')
 
         if self.log_file:
-            for msg in self._stream_logs_from_dir(**kwargs):
+            log_file = self.stack.logs_wd / self.log_file
+            for msg in stream_file(log_file, **kwargs):
                 yield msg
         else:
             for chunk in docker_stream_logs(self.container.id, **kwargs):

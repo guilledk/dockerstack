@@ -19,5 +19,5 @@
     ],
     "requires": ["elasticsearch"],
     "startup_phrase": "Kibana is now available",
-    "startup_logs_kwargs": {"lines": 0, "from_latest": true, "timeout": 60}
+    "startup_logs_kwargs": {"lines": 100, "from_latest": true, "timeout": 60}
 }

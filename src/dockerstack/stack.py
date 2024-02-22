@@ -312,16 +312,6 @@ class DockerStack:
         service_name = self.service_alias_to_name(alias)
         return getattr(self.services, service_name)
 
-    def launch_service_container(
-        self,
-        service: DockerService
-    ):
-        service.launch()
-        service.pre_start()
-
-        # send SIGUSR2 to continue normal container startup
-        service.container.kill(signal=signal.SIGUSR2)
-
     def stream_logs(self, source: str, **kwargs):
         for log in getattr(self.services, source).stream_logs(**kwargs):
             yield log
@@ -378,29 +368,13 @@ class DockerStack:
 
         self.logger.stack_info(f'prepare {serv.name}')
         serv.prepare()
-        self.launch_service_container(serv)
+        serv.launch()
+        serv.pre_start()
 
-        if serv.startup_phrase and serv.config.wait_startup:
-            phrase = serv.startup_phrase
+        # send SIGUSR2 to continue normal container startup
+        serv.container.kill(signal=signal.SIGUSR2)
 
-            self.logger.stack_info(
-                f'waiting until phrase \"{phrase}\" is present '
-                f'in {serv.name} logs (max wait time: {serv.startup_logs_kwargs.timeout} sec)')
-
-            found_phrase = False
-            for msg in serv.stream_logs(**serv.startup_logs_kwargs.model_dump()):
-                if serv.config.show_startup:
-                    self.logger.stack_info(msg.rstrip())
-
-                if serv.startup_phrase in msg:
-                    found_phrase = True
-                    self.logger.stack_info('found phrase!')
-                    break
-
-            if not found_phrase:
-                raise DockerStackException(
-                    f'timed out waiting for phrase \"{phrase}\" to be present '
-                    f'in {serv.name}\'s logs.')
+        serv.wait_startup()
 
         if self.network:
             self.network_service_setup(serv)

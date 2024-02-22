@@ -15,9 +15,9 @@ class MountDict(BaseModel):
 
 
 class StartupKwargs(BaseModel):
-    lines: int = 0
+    lines: int = 100
     from_latest: bool = True
-    timeout: int = 10
+    timeout: int = 30
 
 
 class MkdirEntryDict(BaseModel):
@@ -53,8 +53,10 @@ class ServiceConfig(BaseModel):
     sym_links: list[tuple[str, str]] = []
     www_files: list[WWWFileParams] = []
     virtual_ip: str | None = None
+
     startup_phrase: str | None = None
     startup_logs_kwargs: StartupKwargs = StartupKwargs()
+
     wait_startup: bool = True
     show_startup: bool = False
     show_build: bool = False

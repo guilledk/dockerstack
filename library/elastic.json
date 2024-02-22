@@ -22,7 +22,7 @@
         ["/home/elasticsearch/elasticsearch.yml", "/usr/share/elasticsearch/config/elasticsearch.yml"]
     ],
     "startup_phrase": " indices into cluster_state",
-    "startup_logs_kwargs": {"lines": 0, "from_latest": true, "timeout": 60},
+    "startup_logs_kwargs": {"lines": 100, "from_latest": true, "timeout": 60},
     "stop_sequence": ["SIGKILL"],
 
     "protocol": "http"
